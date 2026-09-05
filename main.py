@@ -36,20 +36,22 @@ class Connection:
         self.sock = None
         self.server = None
         self.generation = 0
+        self.lock = threading.Lock()
 
     def close(self):
-        self.generation += 1
-        sock, self.sock = self.sock, None
+        with self.lock:
+            self.generation += 1
+            sock, self.sock = self.sock, None
+            server, self.server = self.server, None
         if sock:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
             sock.close()
-        if self.server:
-            self.server.terminate()
-            self.server.wait(timeout=5)
-            self.server = None
+        if server:
+            server.terminate()
+            server.wait(timeout=5)
 
     def open(self, address, host=False):
         self.close()
@@ -62,12 +64,13 @@ class Connection:
                     # Avoid silently joining an unrelated listener on the legacy port.
                     with socket.socket() as probe:
                         probe.bind(('0.0.0.0', engine.DEFAULT_PORT))
-                    if generation != self.generation:
-                        return
-                    self.server = subprocess.Popen(
-                        [sys.executable, str(ROOT / 'server.py')], cwd=ROOT,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                    with self.lock:
+                        if generation != self.generation:
+                            return
+                        argv = [sys.executable, '--server'] if getattr(sys, 'frozen', False) else [sys.executable, str(ROOT / 'server.py')]
+                        self.server = subprocess.Popen(
+                            argv, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 deadline = time.monotonic() + 5
                 while generation == self.generation:
                     try:
@@ -77,9 +80,10 @@ class Connection:
                         if not host or time.monotonic() >= deadline:
                             raise
                         time.sleep(.1)
-                if generation != self.generation:
-                    return
-                self.sock = connected
+                with self.lock:
+                    if generation != self.generation:
+                        return
+                    self.sock = connected
                 connected.settimeout(5)
                 message = engine.recv_msg(connected)
                 if message not in ('ID:1', 'ID:2'):
@@ -139,8 +143,6 @@ class App:
         self.running = True
         self.viewport = pg.Rect(0, 0, 1280, 800)
         self.scale = 1280 / W
-        self.log = []
-        self.last_signature = None
 
     def t(self, zh, en):
         return zh if self.zh else en
@@ -237,7 +239,7 @@ class App:
         self.text(self.t('入 座', 'TAKE A SEAT'), 820, 178, 30, INK, True)
         self.text(self.t('邀请一位对手，开始今晚的牌局。', 'One table. Two players. Your next move.'), 822, 231, 17, MUTED)
         self.button((822, 285, 506, 60), self.t('创建房间   →', 'Create room   →'), 'host', True)
-        self.text(self.t('使用本仓库的 config.json 规则', 'Uses this repository’s config.json'), 822, 360, 15, MUTED)
+        self.text(self.t('房主设置决定本局规则', 'The host’s settings define the rules'), 822, 360, 15, MUTED)
         pg.draw.line(self.canvas, LINE, (822, 402), (1328, 402))
         self.text(self.t('加入已有房间', 'JOIN AN EXISTING ROOM'), 822, 426, 16, GOLD)
         self.text(self.t('房主 IP 地址', 'Host IP address'), 822, 471, 16, MUTED)
@@ -274,7 +276,6 @@ class App:
         return bool(self.gs and self.gs.phase == 'ACTION' and self.gs.turn == self.pid and time.monotonic() >= self.cooldown and not self.demo)
 
     def trump_allowed(self, card):
-        own = [t for t in self.gs.active_trumps if t['owner'] == self.pid]
         if any(t['owner'] != self.pid and t['type'] == 'DESTROY_BLOCK' for t in self.gs.active_trumps):
             return False
         # The original protocol does not sync table limit; leave that limit to the server.
@@ -618,7 +619,12 @@ if __name__ == '__main__':
     parser.add_argument('--preview', action='store_true', help='View an explicitly labelled UI sample, without connecting')
     parser.add_argument('--screenshot', type=Path, help='Save the current UI and exit')
     parser.add_argument('--english', action='store_true')
+    parser.add_argument('--server', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.server:
+        GameState.__module__ = '__main__'
+        engine.server_worker()
+        sys.exit(0)
     app = App()
     app.zh = not args.english
     if args.preview:
