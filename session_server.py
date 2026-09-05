@@ -1,4 +1,5 @@
 """Framed legacy transport with bounded reads; clocks run even with idle clients."""
+import os
 import io
 import pickle
 import select
@@ -7,6 +8,9 @@ import struct
 import time
 import re7_21 as engine
 from match import Match
+
+# Optional isolated port for local test sessions; normal players use 6666.
+engine.DEFAULT_PORT = int(os.environ.get("RE7_PORT", engine.DEFAULT_PORT))
 
 
 class CommandUnpickler(pickle.Unpickler):

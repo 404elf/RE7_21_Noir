@@ -39,6 +39,8 @@ def describe(entry, zh=True):
     player = f'玩家 {entry["pid"]}' if zh else f'Player {entry["pid"]}'
     event = entry['event']
     labels = {
+        'draw_offer': (f'{player} 申请平局', f'{player} offers a draw'),
+        'draw_decline': (f'{player} 拒绝平局', f'{player} declines a draw'),
         'round_start': ('新一局开始', 'New round'), 'hit': (f'{player} 抽牌', f'{player} draws'),
         'stay': (f'{player} 停牌', f'{player} stays'), 'discard': (f'{player} 弃置一张王牌', f'{player} discards a trump'),
         'timeout': (f'{player} 时间耗尽', f'{player} runs out of time'),

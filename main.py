@@ -165,6 +165,7 @@ class App:
         self.host = False
         self.demo = False
         self.selected = None
+        self.drag = None
         self.selection_token = None
         self.page = 0
         self.book = False
@@ -267,8 +268,8 @@ class App:
         if not self.sound.available:
             sound_label = self.t('音效不可用', 'No audio device')
         self.button((722, 27, 162, 42), sound_label, 'audio_toggle', enabled=self.sound.available)
-        if self.solo and self.scene == 'game' and not self.demo:
-            self.button((900, 27, 164, 42), self.t('结束练习', 'End practice'), 'leave')
+        if self.scene == 'game' and not self.demo:
+            self.button((900, 27, 164, 42), self.t('对局选项', 'Match options'), 'match_options')
         pg.draw.line(self.canvas, LINE, (32, 88), (1408, 88))
 
     def number_card(self, value, x, y, width=83, height=113, hidden=False, secret=False):
@@ -281,7 +282,6 @@ class App:
                 pg.draw.line(self.canvas, (79, 32, 24), (x+9, y+dy), (x+width-9, y+dy+6))
             cx, cy = rect.center
             pg.draw.polygon(self.canvas, GOLD, [(cx, cy-25), (cx+17, cy), (cx, cy+25), (cx-17, cy)], 1)
-            self.text('?', cx-7, cy-13, 22, GOLD)
         else:
             self.text(value, x+10, y+6, 17, (70, 39, 25), True)
             surf = self.font(min(42, height//3), True).render(str(value), True, (49, 24, 17))
@@ -417,10 +417,21 @@ class App:
         self.text(f'{total}', 838, 455, 40, RED if total > gs.target_score else GOLD, True)
         self.text(self.t('爆牌', 'BUST') if total > gs.target_score else self.t('当前点数', 'YOUR TOTAL'), 838, 513, 15, RED if total > gs.target_score else MUTED)
         self.text(self.t('第一张牌仅你可见', 'Your first card is hidden from your opponent'), 237, 579, 14, MUTED)
+        remaining = getattr(gs, 'clock_remaining', {})
+        active = getattr(gs, 'clock_active', 0)
+        if getattr(gs, 'clock_config', {}).get('enabled'):
+            elapsed = min(2, max(0, time.monotonic()-self.state_received_at))
+            for pid, y in ((3-self.pid, 270), (self.pid, 555)):
+                seconds = max(0, remaining.get(pid, 0)-(elapsed if active == pid else 0))
+                color = RED if seconds < 10 else INK if active == pid else MUTED
+                self.panel((818, y-4, 176, 46), (42, 26, 19) if active == pid else PANEL, GOLD if active == pid else LINE)
+                self.text(f'{int(seconds)//60:02}:{int(seconds)%60:02}', 836, y, 32, color, True)
+        if getattr(gs, 'draw_offer', 0) == 3-self.pid:
+            self.button((460, 96, 325, 43), self.t('对手申请平局 · 查看', 'Draw offered · respond'), 'match_options', True)
         self.sidebar()
         self.text(self.t('你的王牌', 'YOUR TRUMPS'), 34, 655, 21, INK, True)
         self.text(f'{len(trumps):02}', 207, 659, 16, GOLD)
-        self.text(self.t('选牌查看说明，再决定使用或弃置', 'Select a card to inspect, play or discard'), 241, 660, 16, MUTED)
+        self.text(self.t('向上拖至牌桌出牌 · 水平右拖弃牌', 'Drag up to play · Drag right to discard'), 241, 660, 16, MUTED)
         pages = max(1, (len(trumps)+5)//6)
         self.page = min(self.page, pages-1)
         self.button((787, 649, 48, 37), '‹', 'prev', enabled=self.page > 0)
@@ -450,13 +461,6 @@ class App:
 
     def sidebar(self):
         gs = self.gs
-        remaining = getattr(gs, 'clock_remaining', {})
-        active = getattr(gs, 'clock_active', 0)
-        if getattr(gs, 'clock_config', {}).get('enabled'):
-            elapsed = min(2, max(0, time.monotonic()-self.state_received_at))
-            values = [max(0, remaining.get(pid, 0)-(elapsed if active == pid else 0)) for pid in (self.pid, 3-self.pid)]
-            times = [f'{int(value)//60:02}:{int(value)%60:02}' for value in values]
-            self.text(self.t('棋钟 我 / 敌  ', 'CLOCK YOU / OPP  ')+f'{times[0]} / {times[1]}', 1060, 88, 14, RED if values[0] < 10 else GOLD)
         self.panel((1034, 110, 374, 202))
         self.text(self.t('本局目标', 'ROUND TARGET'), 1060, 128, 14, GOLD)
         self.text(gs.target_score, 1056, 154, 59, INK, True)
@@ -488,7 +492,7 @@ class App:
         else:
             self.text('◇', 1189, 556, 51, GOLD)
             self.text(self.t('下一步，由你决定', 'Your next move'), 1060, 652, 25, INK, True)
-            self.wrap(self.t('点击手中的王牌查看效果。使用与弃牌分别操作，避免误触。', 'Select a trump to read its effect. Playing and discarding are separate actions.'), pg.Rect(1060, 704, 318, 95), 18)
+            self.wrap(self.t('向牌桌拖动王牌即可打出；水平向右拖动即可弃置。点击仍可查看说明。', 'Drag a trump onto the table to play; drag horizontally right to discard. Click to inspect.'), pg.Rect(1060, 704, 318, 95), 18)
 
     def result(self):
         gs = self.gs
@@ -498,7 +502,10 @@ class App:
         self.canvas.blit(overlay, (0, 89))
         self.panel((412, 247, 616, 394), (35, 24, 20), RED, 22)
         title = self.t('平 局', 'DRAW') if gs.round_winner == 0 else self.t('本局获胜', 'ROUND WON') if gs.round_winner == self.pid else self.t('本局落败', 'ROUND LOST')
-        self.text(self.t('棋钟耗尽 · 判负', 'TIME FORFEIT') if getattr(gs, 'end_reason', '') == 'timeout' else self.t('牌 局 结 算', 'THE TABLE HAS SPOKEN'), 455, 278, 16, GOLD)
+        self.text(self.t('总时间耗尽 · 判负', 'TIME FORFEIT') if getattr(gs, 'end_reason', '') == 'timeout' else self.t('牌 局 结 算', 'THE TABLE HAS SPOKEN'), 455, 278, 16, GOLD)
+        reason = getattr(gs, 'end_reason', '')
+        if reason in ('surrender', 'agreement'):
+            self.text(self.t('投降结束' if reason == 'surrender' else '双方同意平局', 'SURRENDER' if reason == 'surrender' else 'DRAW AGREED'), 700, 278, 16, GOLD)
         self.text(title, 455, 322, 48, INK, True)
         self.text(f'{sum(gs.p1_hand)}  /  {sum(gs.p2_hand)}', 455, 398, 27, MUTED)
         self.text(self.t(f'玩家 1 / 玩家 2 · 本局伤害 {gs.round_damage}', f'Player 1 / Player 2 · Damage {gs.round_damage}'), 455, 447, 17, MUTED)
@@ -566,6 +573,8 @@ class App:
         if latest:
             self.state_received_at = time.monotonic()
             token = (latest.round_id, tuple(getattr(latest, f'p{self.pid}_trumps')))
+            if token != self.selection_token or latest.phase != 'ACTION' or latest.turn != self.pid:
+                self.drag = None
             if token != self.selection_token:
                 self.selected = None
                 self.selection_token = token
@@ -578,7 +587,7 @@ class App:
     def command(self, name):
         if self.demo or not self.gs:
             return
-        if name != 'REMATCH' and not self.can_act():
+        if name not in ('REMATCH', 'SURRENDER', 'DRAW_OFFER', 'DRAW_ACCEPT', 'DRAW_DECLINE') and not self.can_act():
             return
         if self.connection.send(name, self.gs.round_id):
             self.sound_tracker.sent(name, self.gs, self.pid)
@@ -587,8 +596,12 @@ class App:
             self.connection.events.put((self.connection.generation, 'error', 'connection'))
 
     def action(self, action):
-        if action in ('updates', 'timers', 'history'):
+        if action in ('updates', 'timers', 'history', 'match_options'):
             self.overlay = action
+            return
+        if action in ('SURRENDER', 'DRAW_OFFER', 'DRAW_ACCEPT', 'DRAW_DECLINE'):
+            self.command(action)
+            self.overlay = None
             return
         if action == 'close_overlay':
             self.overlay = None
@@ -662,6 +675,8 @@ class App:
             self.connection.open('127.0.0.1' if self.host else self.ip.strip(), self.host,
                                  (self.difficulty, self.style) if self.solo else None, self.timer)
         elif action == 'menu':
+            self.overlay = None
+            self.drag = None
             self.sound_tracker.reset()
             self.connection.close()
             self.gs = None
@@ -699,19 +714,31 @@ class App:
         shade.fill((4, 9, 8, 235))
         self.canvas.blit(shade, (0, 0))
         self.panel((100, 55, 1240, 790), PANEL, LINE, 22)
-        titles = {'updates': ('手动更新', 'MANUAL UPDATE'), 'timers': ('计时设置', 'TIME CONTROL'), 'history': ('战斗日志', 'ACTION LOG')}
+        titles = {'updates': ('手动更新', 'MANUAL UPDATE'), 'timers': ('计时设置', 'TIME CONTROL'), 'history': ('战斗日志', 'ACTION LOG'), 'match_options': ('对局选项', 'MATCH OPTIONS')}
         self.text(self.t(*titles[self.overlay]), 136, 86, 32, INK, True)
         self.button((1180, 82, 124, 44), self.t('关闭', 'Close'), 'close_overlay')
-        if self.overlay == 'timers':
+        if self.overlay == 'match_options':
+            live = self.gs and self.gs.phase == 'ACTION' and not self.demo
+            offer = getattr(self.gs, 'draw_offer', 0)
+            self.wrap(self.t('投降将立即结束整场对局。申请平局需要对方同意，等待期间正常计时。每人每回合可申请一次。', 'Surrender ends the match. A draw requires your opponent’s agreement. Time continues while waiting. One offer per player per round.'), pg.Rect(136, 165, 1120, 110), 22)
+            self.button((136, 320, 520, 70), self.t('确认投降', 'Confirm surrender'), 'SURRENDER', danger=True, enabled=live)
+            self.button((700, 320, 520, 70), self.t('已申请，等待对方', 'Offer pending') if offer == self.pid else self.t('申请平局', 'Offer draw'), 'DRAW_OFFER', enabled=live and not offer)
+            if offer == 3-self.pid:
+                self.text(self.t('对手希望以平局结束。', 'Your opponent offers a draw.'), 136, 445, 26, GOLD)
+                self.button((136, 510, 520, 70), self.t('同意平局', 'Accept draw'), 'DRAW_ACCEPT', True, live)
+                self.button((700, 510, 520, 70), self.t('拒绝，继续对战', 'Decline draw'), 'DRAW_DECLINE', enabled=live)
+            self.button((136, 705, 520, 60), self.t('返回大厅 / 断开连接', 'Leave and disconnect'), 'menu')
+        elif self.overlay == 'timers':
             self.wrap(self.t('房主统一计时；选择后用于下一场对局。双方入座才开始，结算时暂停。', 'The host controls the clock for the next match. Waiting and settlement do not consume time.'), pg.Rect(136, 145, 1120, 62), 19)
             options = [('off', '不限时', 'No clock'), ('30s', '每次行动 30 秒', '30 seconds per turn'),
-                       ('60s', '每次行动 60 秒', '60 seconds per turn'), ('3+3', '棋钟 3 分钟 + 3 秒', '3 minutes + 3 seconds'),
-                       ('5+3', '棋钟 5 分钟 + 3 秒', '5 minutes + 3 seconds'), ('custom', '读取 timer.json 自定义', 'Load custom timer.json')]
+                       ('60s', '每次行动 60 秒', '60 seconds per turn'), ('3+3', '3 分钟 + 3 秒', '3 minutes + 3 seconds'),
+                       ('5+3', '5 分钟 + 3 秒', '5 minutes + 3 seconds'), ('custom', '读取 timer.json 自定义', 'Load custom timer.json')]
             for i, (key, zh, en) in enumerate(options):
                 self.button((136+(i%2)*584, 244+(i//2)*105, 558, 80), self.t(zh, en), ('timer', key))
+            self.text(self.t('结算等待：', 'Settlement: ')+f"{self.timer['settlement_seconds']:g}s · timer.json / settlement_seconds (0–60)", 136, 565, 17, MUTED)
             mode = self.timer['mode'] if self.timer['enabled'] else 'off'
             self.text(self.t('当前设置：', 'Current: ')+self.clock_label(), 136, 601, 22, GOLD)
-            self.wrap(self.t('单次行动 / 每局额度耗尽：自动停牌。棋钟耗尽：整场判负。\n3+3 表示每人整场 3 分钟，抽牌或停牌交接后加 3 秒。使用、弃置王牌不加秒。\ntimer.json 还可设置每位玩家每局独立时间额度（round）。', 'Turn or per-round timeout: automatic stay. Fischer timeout: match loss.\n3+3 gives each player 3 minutes, plus 3 seconds after handing over with HIT or STAY. Trumps and discards earn no increment.\nUse timer.json for custom times and per-round budgets.'), pg.Rect(136, 650, 1140, 155), 18)
+            self.wrap(self.t('单次行动 / 每局额度耗尽：自动停牌。总时间耗尽：整场判负。\n3+3 表示每人整场 3 分钟，抽牌或停牌交接后加 3 秒。使用、弃置王牌不加秒。\ntimer.json 还可设置每位玩家每局独立时间额度（round）。', 'Turn or per-round timeout: automatic stay. Fischer timeout: match loss.\n3+3 gives each player 3 minutes, plus 3 seconds after handing over with HIT or STAY. Trumps and discards earn no increment.\nUse timer.json for custom times and per-round budgets.'), pg.Rect(136, 650, 1140, 155), 18)
         elif self.overlay == 'history':
             entries = list(reversed(self.history.entries))
             pages = max(1, (len(entries)+11)//12)
@@ -785,6 +812,15 @@ class App:
             self.text(self.t('本次对局进度不会保留。', 'This game’s progress will not be saved.'), 456, 404, 18, MUTED)
             self.button((456, 482, 246, 54), self.t('继续对战', 'Keep playing'), 'continue', True)
             self.button((722, 482, 260, 54), self.t('返回大厅', 'Return to lobby'), 'menu')
+        if self.drag and not self.book and not self.overlay and not self.leave_prompt:
+            target = self.drag_target(self.mouse)
+            point = self.mouse
+            if abs(point[0]-self.drag['start'][0])+abs(point[1]-self.drag['start'][1]) > 12:
+                if target == 'TRUMP':
+                    pg.draw.rect(self.canvas, GOLD, (32, 151, 978, 479), 3)
+                self.panel((int(point[0])-70, int(point[1])-95, 190, 85), (60, 28, 20), RED if target == 'DISCARD' else GOLD)
+                label = self.t('松手弃置', 'Release to discard') if target == 'DISCARD' else self.t('松手出牌', 'Release to play') if target == 'TRUMP' else self.t('拖至牌桌 / 向右弃牌', 'Up: play / Right: discard')
+                self.text(label, int(point[0])-60, int(point[1])-70, 16, INK, True, 170)
         self.canvas.blit(self.theme.scan, (0, 0))
 
     def present(self):
@@ -795,6 +831,30 @@ class App:
         self.window.fill(BG)
         self.window.blit(pg.transform.smoothscale(self.canvas, scaled), self.viewport)
         pg.display.flip()
+
+    def drag_target(self, point):
+        if not self.drag:
+            return None
+        dx, dy = point[0]-self.drag['start'][0], point[1]-self.drag['start'][1]
+        if dx >= 100 and abs(dy) <= 65:
+            return 'DISCARD'
+        if dy <= -70 and pg.Rect(32, 151, 978, 479).collidepoint(point):
+            return 'TRUMP'
+        return None
+
+    def release_drag(self, point):
+        drag, target = self.drag, self.drag_target(point)
+        self.drag = None
+        if not drag or not target or not self.can_act() or self.book or self.overlay or self.leave_prompt:
+            return
+        trumps = tuple(getattr(self.gs, f'p{self.pid}_trumps'))
+        if (self.gs.round_id, trumps) != drag['token']:
+            return
+        if target == 'TRUMP' and not self.trump_allowed(trumps[drag['index']]):
+            self.sound.play('error')
+            return
+        self.command(f"{target}:{drag['index']}")
+        self.selected = None
 
     def run(self):
         try:
@@ -813,9 +873,17 @@ class App:
                         for rect, action in reversed(self.buttons):
                             if rect.collidepoint(point):
                                 self.action(action)
+                                if isinstance(action, tuple) and action[0] == 'select' and self.can_act() and not self.book and not self.overlay:
+                                    self.drag = dict(index=action[1], start=point, token=(self.gs.round_id, tuple(getattr(self.gs, f'p{self.pid}_trumps'))))
                                 break
+                    elif event.type == pg.MOUSEBUTTONUP and event.button == 1:
+                        point = ((event.pos[0]-self.viewport.x)/self.scale, (event.pos[1]-self.viewport.y)/self.scale)
+                        self.release_drag(point)
+                    elif event.type == pg.WINDOWFOCUSLOST:
+                        self.drag = None
                     elif event.type == pg.KEYDOWN:
                         if event.key == pg.K_ESCAPE:
+                            self.drag = None
                             if self.overlay:
                                 self.overlay = None
                             elif self.leave_prompt:

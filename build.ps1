@@ -1,4 +1,4 @@
-param([string]$OutputRoot = 'dist/v1.3.1')
+param([string]$OutputRoot = 'dist/v1.3.2')
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $packageRoot = Join-Path $OutputRoot 'RE7_21_Noir'

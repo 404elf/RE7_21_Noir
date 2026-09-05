@@ -262,6 +262,10 @@ class BotSession:
                         rematch_sent = True
                     continue
                 rematch_sent = False
+                if getattr(state, 'draw_offer', 0) == 1:
+                    # No hidden information: accept when behind in health, decline otherwise.
+                    answer = 'DRAW_ACCEPT' if state.p2_fingers <= state.p1_fingers else 'DRAW_DECLINE'
+                    engine.send_msg(self.sock, f'{answer}:{state.round_id}')
                 if state.round_id != last_round or state.turn != 2 or state.phase != 'ACTION':
                     extra = 0
                     ready_at = now+.85

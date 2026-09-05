@@ -6,7 +6,7 @@ import time
 import uuid
 import re7_21 as engine
 
-DEFAULT_TIMER = dict(enabled=False, mode='turn', turn_seconds=30., round_seconds=120., initial_minutes=3., increment_seconds=3.)
+DEFAULT_TIMER = dict(enabled=False, mode='turn', turn_seconds=30., round_seconds=120., initial_minutes=3., increment_seconds=3., settlement_seconds=1.)
 
 
 def timer_config(value):
@@ -15,10 +15,10 @@ def timer_config(value):
         return config
     config['enabled'] = value.get('enabled') is True
     config['mode'] = value.get('mode') if value.get('mode') in ('turn', 'round', 'fischer') else 'turn'
-    for key, limit in [('turn_seconds', 3600), ('round_seconds', 86400), ('initial_minutes', 1440), ('increment_seconds', 300)]:
+    for key, limit in [('turn_seconds', 3600), ('round_seconds', 86400), ('initial_minutes', 1440), ('increment_seconds', 300), ('settlement_seconds', 60)]:
         number = value.get(key, config[key])
         if isinstance(number, (int, float)) and not isinstance(number, bool) and math.isfinite(number):
-            config[key] = max(0 if key == 'increment_seconds' else 1, min(limit, number))
+            config[key] = max(0 if key in ('increment_seconds', 'settlement_seconds') else 1, min(limit, number))
     return config
 
 
@@ -35,6 +35,8 @@ class Match:
         self.timer = timer_config(timer)
         self.gs = engine.GameState()
         self.gs.end_reason = ''
+        self.gs.draw_offer = 0
+        self.draw_offered_round = {}
         self.last = monotonic()
         self.log = []
         self.sequence = 0
@@ -62,6 +64,8 @@ class Match:
 
     def finish_round(self):
         self.gs.resolve_round()
+        self.gs.result_timer = self.wall()+self.timer['settlement_seconds']
+        self.gs.draw_offer = 0
         self.record('result', winner=self.gs.round_winner, damage=self.gs.round_damage,
                     totals=[sum(self.gs.p1_hand), sum(self.gs.p2_hand)])
 
@@ -70,7 +74,7 @@ class Match:
         elapsed = max(0, now-self.last)
         self.last = now
         gs = self.gs
-        if gs.phase == 'RESULT' and self.wall() > gs.result_timer:
+        if gs.phase == 'RESULT' and self.wall() >= gs.result_timer:
             if gs.p1_fingers <= 0 or gs.p2_fingers <= 0 or gs.is_escape_end:
                 gs.phase = 'GAMEOVER'
                 self.record('gameover', winner=gs.round_winner)
@@ -135,11 +139,39 @@ class Match:
             if gs.p1_req_rematch and gs.p2_req_rematch:
                 gs.full_reset()
                 gs.end_reason = ''
+                gs.draw_offer = 0
+                self.draw_offered_round = {}
                 self.log = []
                 self.match_id = uuid.uuid4().hex
                 self.reset_clock()
                 self.last = self.monotonic()
                 self.record('round_start')
+            self.publish()
+            return True
+        if cmd in ('SURRENDER', 'DRAW_OFFER', 'DRAW_ACCEPT', 'DRAW_DECLINE'):
+            if gs.phase != 'ACTION' or len(parts) != 2:
+                return False
+            if cmd == 'SURRENDER':
+                gs.round_winner, gs.end_reason = 3-pid, 'surrender'
+            elif cmd == 'DRAW_OFFER':
+                if gs.draw_offer or self.draw_offered_round.get(pid) == gs.round_id:
+                    return False
+                gs.draw_offer = pid
+                self.draw_offered_round[pid] = gs.round_id
+                self.record('draw_offer', pid)
+                self.publish()
+                return True
+            else:
+                if gs.draw_offer != 3-pid:
+                    return False
+                if cmd == 'DRAW_DECLINE':
+                    gs.draw_offer = 0
+                    self.record('draw_decline', pid)
+                    self.publish()
+                    return True
+                gs.round_winner, gs.end_reason = 0, 'agreement'
+            gs.phase, gs.round_damage, gs.draw_offer = 'GAMEOVER', 0, 0
+            self.record('gameover', pid, winner=gs.round_winner, reason=gs.end_reason)
             self.publish()
             return True
         if gs.phase != 'ACTION' or gs.turn != pid or self.wall()-gs.last_action_time[pid] < .5:
@@ -186,6 +218,7 @@ class Match:
                 gs.give_trump(pid, 1)
             setattr(gs, f'p{opponent}_stop', False)
             if gs.round_id != old_round:
+                gs.draw_offer = 0
                 if self.timer['mode'] != 'fischer':
                     self.reset_clock()
                 self.record('round_start')

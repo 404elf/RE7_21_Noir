@@ -60,7 +60,7 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(match.gs.p2_fingers, 0)
 
     def test_round_budget_not_reset_on_turn_and_settlement_pauses(self):
-        match, clock = self.make(enabled=True, mode='round', round_seconds=10)
+        match, clock = self.make(enabled=True, mode='round', round_seconds=10, settlement_seconds=10)
         match.gs.p1_hand = [1, 2]
         clock.advance(4)
         match.command(1, f'HIT:{match.gs.round_id}')

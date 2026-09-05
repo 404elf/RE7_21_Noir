@@ -13,8 +13,8 @@ sys.path.insert(0, str(ROOT))
 from re7_21 import GameState, recv_msg, send_msg
 import pygame
 
-exe = ROOT/'dist/v1.3.1/RE7_21_Noir/RE7_21_Noir.exe'
-screenshot = ROOT/'dist/v1.3.1/packaged-preview.png'
+exe = ROOT/'dist/v1.3.2/RE7_21_Noir/RE7_21_Noir.exe'
+screenshot = ROOT/'dist/v1.3.2/packaged-preview.png'
 subprocess.run([str(exe), '--preview', '--screenshot', str(screenshot)], check=True, timeout=30)
 assert pygame.image.load(str(screenshot)).get_size() == (1440, 900)
 
@@ -24,7 +24,7 @@ try:
     deadline = time.monotonic()+10
     while True:
         try:
-            first = socket.create_connection(('127.0.0.1', 6666), timeout=1)
+            first = socket.create_connection(('127.0.0.1', int(os.environ.get('RE7_PORT', 6666))), timeout=1)
             clients.append(first)
             break
         except OSError:
@@ -33,7 +33,7 @@ try:
             time.sleep(.1)
     first.settimeout(6)
     assert recv_msg(first) == 'ID:1'
-    second = socket.create_connection(('127.0.0.1', 6666), timeout=5)
+    second = socket.create_connection(('127.0.0.1', int(os.environ.get('RE7_PORT', 6666))), timeout=5)
     clients.append(second)
     assert recv_msg(second) == 'ID:2'
     state = recv_msg(first)
@@ -49,7 +49,26 @@ try:
             break
     assert len(state.p1_trumps) == count-1
     assert state.turn == 1
-    print('PASS: packaged UI, two-client handshake, legacy pickle and discard command')
+    def until(predicate):
+        deadline = time.monotonic()+5
+        while time.monotonic() < deadline:
+            value = recv_msg(first)
+            assert isinstance(value, GameState)
+            if predicate(value):
+                return value
+        raise AssertionError('Packaged command timed out')
+    send_msg(first, f'DRAW_OFFER:{state.round_id}')
+    state = until(lambda value: value.draw_offer == 1)
+    send_msg(second, f'DRAW_ACCEPT:{state.round_id}')
+    state = until(lambda value: value.phase == 'GAMEOVER')
+    assert state.round_winner == 0 and state.end_reason == 'agreement'
+    send_msg(first, f'REMATCH:{state.round_id}')
+    send_msg(second, f'REMATCH:{state.round_id}')
+    state = until(lambda value: value.phase == 'ACTION')
+    send_msg(second, f'SURRENDER:{state.round_id}')
+    state = until(lambda value: value.phase == 'GAMEOVER')
+    assert state.round_winner == 1 and state.end_reason == 'surrender'
+    print('PASS: packaged UI, two clients, discard, agreed draw, rematch and surrender')
 finally:
     for client in clients:
         client.close()
