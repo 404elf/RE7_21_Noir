@@ -1,0 +1,631 @@
+"""RE7 · 21 NOIR — a bilingual presentation layer over the unchanged engine."""
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import queue
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
+import pygame as pg
+import re7_21 as engine
+from re7_21 import GameState  # legacy pickle compatibility: __main__.GameState
+from cards import CARDS, CATEGORIES, info
+
+ROOT = Path(__file__).resolve().parent
+W, H = 1440, 900
+BG = (15, 20, 21)
+PANEL = (24, 31, 32)
+LINE = (49, 60, 59)
+INK = (232, 230, 218)
+MUTED = (146, 159, 155)
+GOLD = (210, 184, 126)
+GREEN = (119, 180, 162)
+RED = (218, 126, 113)
+
+
+class Connection:
+    """Owns only the UI connection and optional legacy server subprocess."""
+    def __init__(self):
+        self.events = queue.Queue()
+        self.sock = None
+        self.server = None
+        self.generation = 0
+
+    def close(self):
+        self.generation += 1
+        sock, self.sock = self.sock, None
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+        if self.server:
+            self.server.terminate()
+            self.server.wait(timeout=5)
+            self.server = None
+
+    def open(self, address, host=False):
+        self.close()
+        generation = self.generation
+
+        def worker():
+            connected = None
+            try:
+                if host:
+                    # Avoid silently joining an unrelated listener on the legacy port.
+                    with socket.socket() as probe:
+                        probe.bind(('0.0.0.0', engine.DEFAULT_PORT))
+                    if generation != self.generation:
+                        return
+                    self.server = subprocess.Popen(
+                        [sys.executable, str(ROOT / 'server.py')], cwd=ROOT,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                deadline = time.monotonic() + 5
+                while generation == self.generation:
+                    try:
+                        connected = socket.create_connection((address, engine.DEFAULT_PORT), timeout=1)
+                        break
+                    except OSError:
+                        if not host or time.monotonic() >= deadline:
+                            raise
+                        time.sleep(.1)
+                if generation != self.generation:
+                    return
+                self.sock = connected
+                connected.settimeout(5)
+                message = engine.recv_msg(connected)
+                if message not in ('ID:1', 'ID:2'):
+                    raise ConnectionError('handshake')
+                self.events.put((generation, 'id', int(message[-1])))
+                connected.settimeout(None)
+                while generation == self.generation:
+                    state = engine.recv_msg(connected)
+                    if not isinstance(state, GameState):
+                        raise ConnectionError('disconnected')
+                    self.events.put((generation, 'state', state))
+            except OSError as exc:
+                if generation == self.generation:
+                    self.events.put((generation, 'error', 'port' if host and getattr(exc, 'winerror', None) == 10048 else 'connection'))
+            except Exception:
+                if generation == self.generation:
+                    self.events.put((generation, 'error', 'connection'))
+            finally:
+                if connected:
+                    connected.close()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def send(self, command, round_id):
+        return engine.send_msg(self.sock, f'{command}:{round_id}')
+
+
+class App:
+    def __init__(self):
+        pg.init()
+        self.window = pg.display.set_mode((1280, 800), pg.RESIZABLE)
+        pg.display.set_caption('RE7 · 21 | NOIR')
+        self.canvas = pg.Surface((W, H))
+        self.clock = pg.time.Clock()
+        self.fonts = {}
+        self.zh = True
+        self.scene = 'menu'
+        self.ip = '127.0.0.1'
+        self.focus = False
+        self.replace_input = False
+        self.connection = Connection()
+        self.gs = None
+        self.pid = 1
+        self.host = False
+        self.demo = False
+        self.selected = None
+        self.selection_token = None
+        self.page = 0
+        self.book = False
+        self.book_page = 0
+        self.book_selected = None
+        self.error = ''
+        self.cooldown = 0
+        self.rematch = False
+        self.buttons = []
+        self.mouse = (-1, -1)
+        self.running = True
+        self.viewport = pg.Rect(0, 0, 1280, 800)
+        self.scale = 1280 / W
+        self.log = []
+        self.last_signature = None
+
+    def t(self, zh, en):
+        return zh if self.zh else en
+
+    def font(self, size, bold=False):
+        key = (size, bold)
+        if key not in self.fonts:
+            path = pg.font.match_font('microsoftyahei,notosanscjk,simhei,arial', bold=bold)
+            self.fonts[key] = pg.font.Font(path, size)
+        return self.fonts[key]
+
+    def text(self, text, x, y, size=18, color=INK, bold=False, width=None):
+        text = str(text)
+        font = self.font(size, bold)
+        if width:
+            original = text
+            while text and font.size(text)[0] > width:
+                text = text[:-1]
+            if text != original:
+                text = text[:-1] + '…'
+        self.canvas.blit(font.render(text, True, color), (x, y))
+
+    def wrap(self, text, rect, size=18, color=MUTED):
+        font = self.font(size)
+        line = ''
+        y = rect.y
+        for char in text:
+            if char == '\n' or font.size(line + char)[0] > rect.w:
+                self.text(line, rect.x, y, size, color)
+                y += size + 9
+                line = '' if char == '\n' else char
+                if y + size > rect.bottom:
+                    return
+            else:
+                line += char
+        if line and y + size <= rect.bottom:
+            self.text(line, rect.x, y, size, color)
+
+    def panel(self, rect, fill=PANEL, border=LINE, radius=16):
+        pg.draw.rect(self.canvas, fill, rect, border_radius=radius)
+        if border:
+            pg.draw.rect(self.canvas, border, rect, 1, border_radius=radius)
+
+    def button(self, rect, label, action, primary=False, enabled=True, danger=False):
+        rect = pg.Rect(rect)
+        hovered = rect.collidepoint(self.mouse)
+        fill = GOLD if primary else (34, 44, 44)
+        color = BG if primary else (RED if danger else INK)
+        if hovered and enabled:
+            fill = (226, 203, 157) if primary else (47, 60, 59)
+        if not enabled:
+            fill, color = (29, 36, 36), (98, 109, 106)
+        self.panel(rect, fill, GOLD if primary and enabled else LINE, 9)
+        surf = self.font(18, True).render(label, True, color)
+        self.canvas.blit(surf, surf.get_rect(center=rect.center))
+        if enabled:
+            self.buttons.append((rect, action))
+
+    def header(self):
+        self.text('21', 32, 20, 40, GOLD, True)
+        self.text('RE7 / NOIR', 98, 29, 20, INK, True)
+        self.text(self.t('生存牌局', 'SURVIVAL TABLE'), 99, 55, 12, MUTED)
+        self.button((1080, 27, 142, 42), self.t('卡牌图鉴', 'Card guide'), 'book')
+        self.button((1234, 27, 174, 42), '中文  /  EN', 'language')
+        pg.draw.line(self.canvas, LINE, (32, 88), (1408, 88))
+
+    def number_card(self, value, x, y, width=83, height=113, hidden=False, secret=False):
+        rect = pg.Rect(x, y, width, height)
+        self.panel(rect.move(0, 5), (9, 14, 14), None, 9)
+        self.panel(rect, (40, 65, 61) if hidden else (224, 219, 203), (106, 128, 114) if hidden else (242, 232, 206), 9)
+        if hidden:
+            pg.draw.rect(self.canvas, (87, 119, 103), rect.inflate(-12, -12), 1, border_radius=5)
+            cx, cy = rect.center
+            pg.draw.polygon(self.canvas, GOLD, [(cx, cy-25), (cx+17, cy), (cx, cy+25), (cx-17, cy)], 1)
+            self.text('?', cx-7, cy-13, 22, GOLD)
+        else:
+            self.text(value, x+10, y+6, 17, (60, 69, 62), True)
+            surf = self.font(min(42, height//3), True).render(str(value), True, (37, 51, 47))
+            self.canvas.blit(surf, surf.get_rect(center=rect.center))
+            self.text(self.t('暗牌', 'HIDDEN') if secret else '· 21 ·', x+10, y+height-24, 11, (91, 100, 87))
+
+    def menu(self):
+        self.text(self.t('每一张牌，都是一次抉择。', 'EVERY CARD IS A CHOICE.'), 70, 151, 18, GOLD)
+        self.text(self.t('二十一点', 'TWENTY ONE'), 64, 192, 70, INK, True)
+        self.text(self.t('赌上下一回合。', 'Stay in the game.'), 70, 296, 32, MUTED)
+        self.wrap(self.t('在逼近目标与保全生命之间，打出你的答案。\n双人联机 · 自定义规则 · 王牌博弈', 'Walk the line between the perfect hand and survival.\nTwo players. Custom rules. A hand full of possibilities.'), pg.Rect(72, 369, 590, 115), 20)
+        self.number_card(7, 105, 518, 142, 193)
+        self.number_card(3, 272, 492, 142, 193, hidden=True)
+        self.number_card(11, 439, 518, 142, 193)
+        self.text('01 / SURVIVE', 75, 760, 14, GOLD)
+        self.text('02 / ADAPT', 282, 760, 14, MUTED)
+        self.text('03 / OUTPLAY', 476, 760, 14, MUTED)
+        self.panel((780, 144, 590, 654))
+        self.text(self.t('入 座', 'TAKE A SEAT'), 820, 178, 30, INK, True)
+        self.text(self.t('邀请一位对手，开始今晚的牌局。', 'One table. Two players. Your next move.'), 822, 231, 17, MUTED)
+        self.button((822, 285, 506, 60), self.t('创建房间   →', 'Create room   →'), 'host', True)
+        self.text(self.t('使用本仓库的 config.json 规则', 'Uses this repository’s config.json'), 822, 360, 15, MUTED)
+        pg.draw.line(self.canvas, LINE, (822, 402), (1328, 402))
+        self.text(self.t('加入已有房间', 'JOIN AN EXISTING ROOM'), 822, 426, 16, GOLD)
+        self.text(self.t('房主 IP 地址', 'Host IP address'), 822, 471, 16, MUTED)
+        self.panel((822, 505, 506, 56), BG, GOLD if self.focus else LINE, 9)
+        self.text(self.ip + ('|' if self.focus and int(time.time()*2)%2 else ''), 840, 518, 21)
+        self.buttons.append((pg.Rect(822, 505, 506, 56), 'focus'))
+        self.button((822, 578, 506, 56), self.t('加入房间', 'Join room'), 'join', enabled=bool(self.ip.strip()))
+        self.wrap(self.t('双方需处于同一局域网或虚拟组网。默认端口 6666。', 'Use the same LAN or virtual network. Default port: 6666.'), pg.Rect(822, 649, 506, 66), 16)
+        if self.error:
+            self.wrap(self.error, pg.Rect(822, 716, 506, 64), 16, RED)
+
+    def waiting(self):
+        self.panel((350, 240, 740, 390))
+        self.text('· · ·', 661, 276, 48, GOLD)
+        title = self.t('等待对手入座', 'Waiting for an opponent') if self.scene == 'waiting' else self.t('正在连接房间', 'Connecting to the room')
+        self.text(title, 420, 362, 34, INK, True)
+        self.wrap(self.t('让对手输入你的局域网或虚拟 IP，即可加入牌局。', 'Ask your opponent to join using your LAN or virtual IP address.') if self.host else self.t('连接成功后，双方入座便会自动开始。', 'The game starts automatically when both players are seated.'), pg.Rect(420, 424, 600, 80), 19)
+        self.button((420, 548, 600, 48), self.t('取消并返回', 'Cancel and return'), 'menu')
+
+    def health(self, value, maximum, x, y, width=145):
+        self.panel((x, y, width, 5), (44, 53, 50), None, 2)
+        ratio = max(0, min(1, value / max(1, maximum)))
+        if ratio:
+            pg.draw.rect(self.canvas, GREEN if ratio > .3 else RED, (x, y, max(1, int(width*ratio)), 5), border_radius=2)
+
+    def hand(self, hand, x, y, width, opponent=False):
+        card_w = min(83, max(33, width // max(1, len(hand))-9))
+        for index, value in enumerate(hand):
+            self.number_card(value, x+index*(card_w+9), y, card_w, 107,
+                             hidden=opponent and index == 0 and self.gs.phase == 'ACTION',
+                             secret=not opponent and index == 0)
+
+    def can_act(self):
+        return bool(self.gs and self.gs.phase == 'ACTION' and self.gs.turn == self.pid and time.monotonic() >= self.cooldown and not self.demo)
+
+    def trump_allowed(self, card):
+        own = [t for t in self.gs.active_trumps if t['owner'] == self.pid]
+        if any(t['owner'] != self.pid and t['type'] == 'DESTROY_BLOCK' for t in self.gs.active_trumps):
+            return False
+        # The original protocol does not sync table limit; leave that limit to the server.
+        return True
+
+    def game(self):
+        gs = self.gs
+        mine = getattr(gs, f'p{self.pid}_hand')
+        theirs = getattr(gs, f'p{3-self.pid}_hand')
+        trumps = getattr(gs, f'p{self.pid}_trumps')
+        my_hp = getattr(gs, f'p{self.pid}_fingers')
+        opp_hp = getattr(gs, f'p{3-self.pid}_fingers')
+        self.text(self.t(f'第 {gs.round_id:02} 回合', f'ROUND {gs.round_id:02}'), 34, 110, 18, MUTED)
+        turn = self.t('你的行动', 'YOUR TURN') if gs.turn == self.pid else self.t('对手行动中', 'OPPONENT’S TURN')
+        if gs.phase != 'ACTION':
+            turn = self.t('本局结算', 'ROUND RESULT')
+        self.text(turn, 824, 110, 18, GOLD)
+        self.panel((32, 151, 978, 479), (23, 39, 36), (54, 74, 65), 24)
+        self.text(self.t('对手', 'OPPONENT'), 60, 175, 20, INK, True)
+        self.text(f'{max(0, opp_hp)} / {gs.max_hp_limit}', 60, 211, 18, MUTED)
+        self.health(opp_hp, gs.max_hp_limit, 60, 245)
+        opp_total = f'? + {sum(theirs[1:])}' if gs.phase == 'ACTION' else str(sum(theirs))
+        self.text(opp_total, 838, 184, 28, GOLD, True, 142)
+        self.text(self.t('明牌点数', 'VISIBLE TOTAL') if gs.phase == 'ACTION' else self.t('总点数', 'TOTAL'), 838, 230, 13, MUTED)
+        self.hand(theirs, 236, 176, 580, True)
+        self.text(self.t('已停牌', 'STAYING') if getattr(gs, f'p{3-self.pid}_stop') else self.t('王牌', 'TRUMPS')+f' · {len(getattr(gs, f"p{3-self.pid}_trumps"))}', 60, 274, 15, MUTED)
+        pg.draw.line(self.canvas, (48, 70, 61), (60, 322), (982, 322))
+        self.text(self.t('场上效果', 'TABLE EFFECTS'), 60, 339, 14, MUTED)
+        active = gs.active_trumps
+        table_page = int(time.monotonic()/5) % max(1, (len(active)+5)//6)
+        for i, card in enumerate(active[table_page*6:table_page*6+6]):
+            x = 227 + (i%3)*249
+            y = 331 + (i//3)*36
+            name = info(card['name'])[0] if self.zh else card['name']
+            owner = self.t('我', 'YOU') if card['owner'] == self.pid else self.t('敌', 'OPP')
+            self.text(f'{owner} · {name}', x, y, 15, GREEN if card['owner'] == self.pid else RED, width=240)
+        if not active:
+            self.text(self.t('暂无持续效果', 'No active effects'), 236, 339, 16, MUTED)
+        pg.draw.line(self.canvas, (48, 70, 61), (60, 411), (982, 411))
+        self.text(self.t('你', 'YOU'), 60, 439, 20, INK, True)
+        self.text(f'{max(0, my_hp)} / {gs.max_hp_limit}', 60, 477, 18, MUTED)
+        self.health(my_hp, gs.max_hp_limit, 60, 513)
+        self.text(self.t('已停牌', 'STAYING') if getattr(gs, f'p{self.pid}_stop') else self.t('生命值', 'VITALITY'), 60, 540, 15, MUTED)
+        self.hand(mine, 236, 447, 580)
+        total = sum(mine)
+        self.text(f'{total}', 838, 455, 40, RED if total > gs.target_score else GOLD, True)
+        self.text(self.t('爆牌', 'BUST') if total > gs.target_score else self.t('当前点数', 'YOUR TOTAL'), 838, 513, 15, RED if total > gs.target_score else MUTED)
+        self.text(self.t('第一张牌仅你可见', 'Your first card is hidden from your opponent'), 237, 579, 14, MUTED)
+        self.sidebar()
+        self.text(self.t('你的王牌', 'YOUR TRUMPS'), 34, 655, 21, INK, True)
+        self.text(f'{len(trumps):02}', 183, 659, 16, GOLD)
+        self.text(self.t('选牌查看说明，再决定使用或弃置', 'Select a card to inspect, play or discard'), 241, 660, 16, MUTED)
+        pages = max(1, (len(trumps)+5)//6)
+        self.page = min(self.page, pages-1)
+        self.button((787, 649, 48, 37), '‹', 'prev', enabled=self.page > 0)
+        self.text(f'{self.page+1} / {pages}', 853, 657, 16, MUTED)
+        self.button((937, 649, 48, 37), '›', 'next', enabled=self.page+1 < pages)
+        for i, card in enumerate(trumps[self.page*6:self.page*6+6]):
+            idx = self.page*6+i
+            self.trump(card[0], pg.Rect(32+i*165, 706, 153, 140), self.selected == idx, ('select', idx))
+        if not trumps:
+            self.text(self.t('手中暂无王牌。抽牌或新回合可能带来转机。', 'No trumps in hand. A draw or a new round may change that.'), 48, 757, 18, MUTED)
+        if gs.phase in ('RESULT', 'GAMEOVER'):
+            self.result()
+
+    def trump(self, name, rect, selected, action):
+        zh, category, _, _ = info(name)
+        cat_zh, cat_en, color, symbol = CATEGORIES[category]
+        hover = rect.collidepoint(self.mouse)
+        self.panel(rect, (36, 44, 42) if selected or hover else PANEL, GOLD if selected else LINE, 12)
+        pg.draw.line(self.canvas, color, (rect.x+16, rect.y+1), (rect.right-16, rect.y+1), 2)
+        self.text(cat_zh if self.zh else cat_en, rect.x+14, rect.y+13, 12, color)
+        self.text(symbol, rect.right-38, rect.y+7, 24, color)
+        self.text(zh if self.zh else name, rect.x+14, rect.y+54, 18, INK, True, rect.w-25)
+        self.text(name if self.zh else zh, rect.x+14, rect.y+87, 12, MUTED, width=rect.w-25)
+        if selected:
+            self.text(self.t('已选择', 'SELECTED'), rect.x+14, rect.bottom-24, 11, GOLD)
+        self.buttons.append((rect, action))
+
+    def sidebar(self):
+        gs = self.gs
+        self.panel((1034, 110, 374, 202))
+        self.text(self.t('本局目标', 'ROUND TARGET'), 1060, 128, 14, GOLD)
+        self.text(gs.target_score, 1056, 154, 59, INK, True)
+        self.text(self.t('牌堆剩余', 'DECK LEFT'), 1239, 154, 13, MUTED)
+        self.text(len(gs.deck), 1239, 178, 30, INK, True)
+        pg.draw.line(self.canvas, LINE, (1060, 239), (1382, 239))
+        self.text(self.t('预计造成 / 承受伤害', 'DAMAGE OUT / IN'), 1060, 256, 14, MUTED)
+        self.text(f'{gs.calculate_potential_damage(3-self.pid)} / {gs.calculate_potential_damage(self.pid)}', 1281, 251, 25, GOLD, True, 102)
+        self.panel((1034, 326, 374, 151))
+        allowed = self.can_act()
+        locked = any(t['owner'] != self.pid and t['type'] in ('GAMBLE', 'SILENCE') for t in gs.active_trumps)
+        hit = allowed and not gs.check_bust(self.pid) and not locked and bool(gs.deck)
+        self.button((1054, 349, 161, 55), self.t('抽牌', 'HIT'), 'hit', True, hit)
+        self.button((1227, 349, 161, 55), self.t('停牌', 'STAY'), 'stay', enabled=allowed)
+        message = self.t('抽牌已被封锁', 'Drawing is locked') if locked else self.t('双方停牌后结算 · 王牌不结束行动', 'Both stay to settle · Trumps keep your turn')
+        self.wrap(message, pg.Rect(1057, 420, 320, 45), 14)
+        self.panel((1034, 491, 374, 355))
+        trumps = getattr(gs, f'p{self.pid}_trumps')
+        if self.selected is not None and self.selected < len(trumps):
+            name = trumps[self.selected][0]
+            zh, cat, desc, en = info(name)
+            color = CATEGORIES[cat][2]
+            self.text(self.t('卡牌详情', 'CARD DETAIL'), 1060, 513, 13, color)
+            self.text(zh if self.zh else name, 1060, 546, 26, INK, True, 319)
+            self.text(name if self.zh else zh, 1060, 590, 14, MUTED)
+            self.wrap(desc if self.zh else en, pg.Rect(1060, 628, 320, 126), 18)
+            self.button((1054, 779, 161, 47), self.t('使用王牌', 'Play trump'), 'play', True, allowed and self.trump_allowed(trumps[self.selected]))
+            self.button((1227, 779, 161, 47), self.t('弃置', 'Discard'), 'discard', enabled=allowed, danger=True)
+        else:
+            self.text('◇', 1189, 556, 51, GOLD)
+            self.text(self.t('下一步，由你决定', 'Your next move'), 1060, 652, 25, INK, True)
+            self.wrap(self.t('点击手中的王牌查看效果。使用与弃牌分别操作，避免误触。', 'Select a trump to read its effect. Playing and discarding are separate actions.'), pg.Rect(1060, 704, 318, 95), 18)
+
+    def result(self):
+        gs = self.gs
+        self.buttons = [b for b in self.buttons if b[1] in ('book', 'language')]
+        overlay = pg.Surface((W, H), pg.SRCALPHA)
+        overlay.fill((5, 10, 10, 185))
+        self.canvas.blit(overlay, (0, 89))
+        self.panel((412, 247, 616, 394), (26, 36, 33), GOLD, 22)
+        title = self.t('平 局', 'DRAW') if gs.round_winner == 0 else self.t('本局获胜', 'ROUND WON') if gs.round_winner == self.pid else self.t('本局落败', 'ROUND LOST')
+        self.text(self.t('牌 局 结 算', 'THE TABLE HAS SPOKEN'), 455, 278, 16, GOLD)
+        self.text(title, 455, 322, 48, INK, True)
+        self.text(f'{sum(gs.p1_hand)}  /  {sum(gs.p2_hand)}', 455, 398, 27, MUTED)
+        self.text(self.t(f'玩家 1 / 玩家 2 · 本局伤害 {gs.round_damage}', f'Player 1 / Player 2 · Damage {gs.round_damage}'), 455, 447, 17, MUTED)
+        if gs.phase == 'GAMEOVER':
+            self.button((454, 539, 256, 54), self.t('等待对方同意', 'Waiting for opponent') if self.rematch else self.t('再来一局', 'Play again'), 'rematch', True, not self.rematch and not self.demo)
+            self.button((729, 539, 256, 54), self.t('返回大厅', 'Return to lobby'), 'menu')
+        else:
+            seconds = max(0, int(gs.result_timer-time.time())+1)
+            self.text(self.t(f'{seconds} 秒后继续', f'Continuing in {seconds}s'), 455, 549, 21, GOLD)
+
+    def catalog(self):
+        self.buttons = []
+        overlay = pg.Surface((W, H), pg.SRCALPHA)
+        overlay.fill((4, 9, 8, 235))
+        self.canvas.blit(overlay, (0, 0))
+        self.panel((100, 55, 1240, 790), PANEL, LINE, 22)
+        self.text(self.t('王牌档案', 'THE TRUMP ARCHIVE'), 136, 86, 32, INK, True)
+        self.text(self.t('名称对照与效果速查 · 实际结算沿用原版代码', 'Names & reference effects · The original engine decides all outcomes'), 137, 137, 16, MUTED)
+        self.button((1190, 83, 111, 44), self.t('关闭', 'Close'), 'book')
+        names = list(CARDS)
+        pages = (len(names)+14)//15
+        for i, name in enumerate(names[self.book_page*15:self.book_page*15+15]):
+            self.trump(name, pg.Rect(136+(i%5)*164, 190+(i//5)*158, 151, 140), self.book_selected == name, ('inspect', name))
+        self.panel((976, 190, 328, 457), BG)
+        name = self.book_selected
+        if name:
+            zh, _, desc, english = info(name)
+            self.text(zh if self.zh else name, 1001, 217, 25, GOLD, True, 278)
+            self.text(name if self.zh else zh, 1001, 261, 16, MUTED, width=278)
+            self.wrap(desc if self.zh else english, pg.Rect(1001, 315, 277, 277), 19)
+        else:
+            self.wrap(self.t('选择任意王牌，查看中文名称与效果说明。', 'Choose a trump to read its name and effect.'), pg.Rect(1001, 239, 276, 140), 21)
+        self.wrap(self.t('“图鉴效果”表示参考图片中的设计；已知原版实现差异详见 README。', '“Reference” describes the card sheet. Known engine differences are documented in README.'), pg.Rect(137, 688, 1100, 49), 16, MUTED)
+        self.button((136, 758, 150, 46), self.t('上一页', 'Previous'), 'book_prev', enabled=self.book_page > 0)
+        self.text(f'{self.book_page+1} / {pages}   ·   {len(CARDS)} '+self.t('张王牌', 'trumps'), 318, 770, 17, GOLD)
+        self.button((1153, 758, 150, 46), self.t('下一页', 'Next'), 'book_next', enabled=self.book_page+1 < pages)
+
+    def receive(self):
+        latest = None
+        while True:
+            try:
+                generation, event, value = self.connection.events.get_nowait()
+            except queue.Empty:
+                break
+            if generation != self.connection.generation:
+                continue
+            if event == 'id':
+                self.pid = value
+                self.scene = 'waiting'
+            elif event == 'state':
+                latest = value
+            elif event == 'error':
+                self.connection.close()
+                self.scene = 'menu'
+                self.error = self.t('端口 6666 已被占用，请关闭已有房间。', 'Port 6666 is in use. Close the existing room.') if value == 'port' else self.t('连接已中断或失败，请确认房主 IP、组网和房间状态。', 'Connection failed or closed. Check the host IP, network and room.')
+                latest = None
+        if latest:
+            token = (latest.round_id, tuple(getattr(latest, f'p{self.pid}_trumps')))
+            if token != self.selection_token:
+                self.selected = None
+                self.selection_token = token
+            self.gs = latest
+            self.scene = 'game'
+            if latest.phase == 'ACTION':
+                self.rematch = False
+
+    def command(self, name):
+        if self.demo or not self.gs:
+            return
+        if name != 'REMATCH' and not self.can_act():
+            return
+        if self.connection.send(name, self.gs.round_id):
+            self.cooldown = time.monotonic()+.55
+        else:
+            self.connection.events.put((self.connection.generation, 'error', 'connection'))
+
+    def action(self, action):
+        if isinstance(action, tuple):
+            kind, value = action
+            if kind == 'select':
+                self.selected = value
+            elif kind == 'inspect':
+                self.book_selected = value
+            return
+        if action == 'language':
+            self.zh = not self.zh
+        elif action == 'book':
+            self.book = not self.book
+        elif action == 'focus':
+            self.focus = True
+            self.replace_input = True
+        elif action in ('host', 'join'):
+            self.error = ''
+            self.gs = None
+            self.selected = None
+            self.page = 0
+            self.focus = False
+            self.demo = False
+            self.host = action == 'host'
+            self.scene = 'connecting'
+            self.connection.open('127.0.0.1' if self.host else self.ip.strip(), self.host)
+        elif action == 'menu':
+            self.connection.close()
+            self.gs = None
+            self.demo = False
+            self.scene = 'menu'
+            self.error = ''
+        elif action == 'hit':
+            self.command('HIT')
+        elif action == 'stay':
+            self.command('STAY')
+        elif action in ('play', 'discard') and self.selected is not None:
+            self.command(('TRUMP' if action == 'play' else 'DISCARD') + f':{self.selected}')
+            self.selected = None
+        elif action == 'rematch':
+            self.command('REMATCH')
+            self.rematch = True
+        elif action == 'prev':
+            self.page = max(0, self.page-1)
+        elif action == 'next':
+            self.page += 1
+        elif action == 'book_prev':
+            self.book_page = max(0, self.book_page-1)
+        elif action == 'book_next':
+            self.book_page = min((len(CARDS)-1)//15, self.book_page+1)
+
+    def render(self):
+        self.buttons = []
+        self.canvas.fill(BG)
+        self.header()
+        if self.scene == 'menu':
+            self.menu()
+        elif self.scene in ('connecting', 'waiting'):
+            self.waiting()
+        else:
+            self.game()
+        self.text('RE7 / 21   —   NOIR EDITION', 33, 875, 11, MUTED)
+        if self.demo:
+            self.text(self.t('界面预览 · 非真实对局', 'UI PREVIEW · NOT A LIVE GAME'), 1015, 872, 14, GOLD)
+        else:
+            self.text(self.t('中文 / EN   ·   原版规则', '中文 / EN   ·   ORIGINAL RULES'), 1117, 875, 11, MUTED)
+        if self.book:
+            self.catalog()
+
+    def present(self):
+        size = self.window.get_size()
+        self.scale = min(size[0]/W, size[1]/H)
+        scaled = (max(1, int(W*self.scale)), max(1, int(H*self.scale)))
+        self.viewport = pg.Rect((size[0]-scaled[0])//2, (size[1]-scaled[1])//2, *scaled)
+        self.window.fill(BG)
+        self.window.blit(pg.transform.smoothscale(self.canvas, scaled), self.viewport)
+        pg.display.flip()
+
+    def run(self):
+        try:
+            while self.running:
+                self.clock.tick(60)
+                self.receive()
+                mx, my = pg.mouse.get_pos()
+                self.mouse = ((mx-self.viewport.x)/self.scale, (my-self.viewport.y)/self.scale)
+                self.render()
+                for event in pg.event.get():
+                    if event.type == pg.QUIT:
+                        self.running = False
+                    elif event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
+                        point = ((event.pos[0]-self.viewport.x)/self.scale, (event.pos[1]-self.viewport.y)/self.scale)
+                        self.focus = False
+                        for rect, action in reversed(self.buttons):
+                            if rect.collidepoint(point):
+                                self.action(action)
+                                break
+                    elif event.type == pg.KEYDOWN:
+                        if event.key == pg.K_ESCAPE:
+                            if self.book:
+                                self.book = False
+                            else:
+                                self.focus = False
+                        elif self.focus and self.scene == 'menu' and not self.book:
+                            if event.key == pg.K_BACKSPACE:
+                                self.ip = '' if self.replace_input else self.ip[:-1]
+                                self.replace_input = False
+                            elif event.key == pg.K_a and event.mod & pg.KMOD_CTRL:
+                                self.replace_input = True
+                            elif event.key == pg.K_v and event.mod & pg.KMOD_CTRL:
+                                try:
+                                    pg.scrap.init()
+                                    pasted = pg.scrap.get_text().strip()
+                                    self.ip = ''.join(c for c in pasted if c.isascii() and (c.isalnum() or c in '.-:'))[:253]
+                                    self.replace_input = False
+                                except pg.error:
+                                    pass
+                            elif event.key == pg.K_RETURN and self.ip:
+                                self.action('join')
+                            elif event.unicode and event.unicode.isascii() and (event.unicode.isalnum() or event.unicode in '.-:'):
+                                self.ip = ('' if self.replace_input else self.ip) + event.unicode
+                                self.ip = self.ip[:253]
+                                self.replace_input = False
+                self.present()
+        finally:
+            self.connection.close()
+            pg.quit()
+
+    def preview(self):
+        self.demo = True
+        self.scene = 'game'
+        self.gs = GameState()
+        self.gs.p1_hand = [7, 4, 6]
+        self.gs.p2_hand = [3, 8]
+        self.gs.p1_fingers = 8
+        self.gs.round_id = 3
+        self.gs.p1_trumps = [('Perfect', 'PERFECT', 0), ('Shield+', 'SHIELD', 2), ('Go 24', 'TARGET', 24), ('Return', 'RETURN', 0), ('Trump+', 'TRUMP_EXCHANGE', 0), ('Add 2', 'ADD', 2)]
+        self.gs.active_trumps = [{'name': 'Shield', 'owner': 1, 'type': 'SHIELD', 'val': 1}, {'name': 'Add 1', 'owner': 2, 'type': 'ADD', 'val': 1}]
+        self.selected = 0
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--preview', action='store_true', help='View an explicitly labelled UI sample, without connecting')
+    parser.add_argument('--screenshot', type=Path, help='Save the current UI and exit')
+    parser.add_argument('--english', action='store_true')
+    args = parser.parse_args()
+    app = App()
+    app.zh = not args.english
+    if args.preview:
+        app.preview()
+    if args.screenshot:
+        app.render()
+        pg.image.save(app.canvas, args.screenshot)
+        pg.quit()
+    else:
+        app.run()
