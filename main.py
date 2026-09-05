@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import json
 
 os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 import pygame as pg
@@ -19,6 +20,10 @@ from re7_21 import GameState  # legacy pickle compatibility: __main__.GameState
 from cards import CARDS, CATEGORIES, info
 from bot import BotSession, DIFFICULTIES, STYLES
 from sound import SoundManager, SoundTracker
+from match import load_timer, timer_config
+from session_server import server_worker
+from updater import Updater
+from history import History, describe
 
 ROOT = Path(__file__).resolve().parent
 W, H = 1440, 900
@@ -60,7 +65,7 @@ class Connection:
             server.terminate()
             server.wait(timeout=5)
 
-    def open(self, address, host=False, bot_options=None):
+    def open(self, address, host=False, bot_options=None, timer=None):
         self.close()
         generation = self.generation
 
@@ -75,6 +80,8 @@ class Connection:
                         if generation != self.generation:
                             return
                         argv = [sys.executable, '--server'] if getattr(sys, 'frozen', False) else [sys.executable, str(ROOT / 'server.py')]
+                        if timer is not None:
+                            argv += ['--timer', json.dumps(timer)]
                         self.server = subprocess.Popen(
                             argv, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -133,6 +140,13 @@ class App:
         audio_root = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else ROOT
         self.sound = SoundManager(audio_root)
         self.sound_tracker = SoundTracker()
+        self.data_root = audio_root
+        self.timer = load_timer(audio_root)
+        self.updater = Updater(audio_root)
+        self.history = History(audio_root)
+        self.overlay = None
+        self.log_page = 0
+        self.state_received_at = time.monotonic()
         self.window = pg.display.set_mode((1280, 800), pg.RESIZABLE)
         pg.display.set_caption('RE7 · 21 | NOIR')
         self.canvas = pg.Surface((W, H))
@@ -170,6 +184,15 @@ class App:
 
     def t(self, zh, en):
         return zh if self.zh else en
+
+    def clock_label(self):
+        if not self.timer['enabled']:
+            return self.t('不限时', 'No clock')
+        mode = self.timer['mode']
+        if mode == 'fischer':
+            return f'{self.timer["initial_minutes"]:g}+{self.timer["increment_seconds"]:g}'
+        seconds = self.timer[mode+'_seconds']
+        return self.t(f'{seconds:g} 秒 / '+('行动' if mode == 'turn' else '每人每局'), f'{seconds:g}s / '+('turn' if mode == 'turn' else 'player per round'))
 
     def font(self, size, bold=False):
         key = (size, bold)
@@ -230,6 +253,12 @@ class App:
         self.text('21', 32, 20, 40, GOLD, True)
         self.text('RE7 / NOIR', 98, 29, 20, INK, True)
         self.text(self.t('生存牌局', 'SURVIVAL TABLE'), 99, 55, 12, MUTED)
+        if self.scene == 'menu':
+            self.button((300, 27, 120, 42), self.t('手动更新', 'Updates'), 'updates')
+        if self.scene in ('menu', 'solo_setup'):
+            self.button((434, 27, 154, 42), self.t('计时设置', 'Time control'), 'timers')
+        elif self.scene == 'game':
+            self.button((434, 27, 154, 42), self.t('战斗日志', 'Action log'), 'history')
         self.button((1080, 27, 142, 42), self.t('卡牌图鉴', 'Card guide'), 'book')
         self.button((1234, 27, 174, 42), '中文  /  EN', 'language')
         sound_label = self.t('音效：开', 'Sound: on') if self.sound.enabled else self.t('音效：关', 'Sound: off')
@@ -271,7 +300,7 @@ class App:
         self.text(self.t('邀请一位对手，开始今晚的牌局。', 'One table. Two players. Your next move.'), 822, 231, 17, MUTED)
         self.button((822, 285, 244, 60), self.t('人机对战   →', 'Play against AI   →'), 'solo_setup', True)
         self.button((1082, 285, 246, 60), self.t('创建联机房间', 'Host multiplayer'), 'host')
-        self.text(self.t('独自练习，或邀请朋友加入牌局', 'Practice solo or invite a friend to the table'), 822, 360, 15, MUTED)
+        self.text(self.t('房主计时：', 'Host clock: ')+self.clock_label(), 822, 360, 15, MUTED)
         pg.draw.line(self.canvas, LINE, (822, 402), (1328, 402))
         self.text(self.t('加入已有房间', 'JOIN AN EXISTING ROOM'), 822, 426, 16, GOLD)
         self.text(self.t('房主 IP 地址', 'Host IP address'), 822, 471, 16, MUTED)
@@ -417,6 +446,13 @@ class App:
 
     def sidebar(self):
         gs = self.gs
+        remaining = getattr(gs, 'clock_remaining', {})
+        active = getattr(gs, 'clock_active', 0)
+        if getattr(gs, 'clock_config', {}).get('enabled'):
+            elapsed = min(2, max(0, time.monotonic()-self.state_received_at))
+            values = [max(0, remaining.get(pid, 0)-(elapsed if active == pid else 0)) for pid in (self.pid, 3-self.pid)]
+            times = [f'{int(value)//60:02}:{int(value)%60:02}' for value in values]
+            self.text(self.t('棋钟 我 / 敌  ', 'CLOCK YOU / OPP  ')+f'{times[0]} / {times[1]}', 1060, 88, 14, RED if values[0] < 10 else GOLD)
         self.panel((1034, 110, 374, 202))
         self.text(self.t('本局目标', 'ROUND TARGET'), 1060, 128, 14, GOLD)
         self.text(gs.target_score, 1056, 154, 59, INK, True)
@@ -452,13 +488,13 @@ class App:
 
     def result(self):
         gs = self.gs
-        self.buttons = [b for b in self.buttons if b[1] in ('book', 'language')]
+        self.buttons = [b for b in self.buttons if b[1] in ('book', 'language', 'audio_toggle', 'history')]
         overlay = pg.Surface((W, H), pg.SRCALPHA)
         overlay.fill((5, 10, 10, 185))
         self.canvas.blit(overlay, (0, 89))
         self.panel((412, 247, 616, 394), (26, 36, 33), GOLD, 22)
         title = self.t('平 局', 'DRAW') if gs.round_winner == 0 else self.t('本局获胜', 'ROUND WON') if gs.round_winner == self.pid else self.t('本局落败', 'ROUND LOST')
-        self.text(self.t('牌 局 结 算', 'THE TABLE HAS SPOKEN'), 455, 278, 16, GOLD)
+        self.text(self.t('棋钟耗尽 · 判负', 'TIME FORFEIT') if getattr(gs, 'end_reason', '') == 'timeout' else self.t('牌 局 结 算', 'THE TABLE HAS SPOKEN'), 455, 278, 16, GOLD)
         self.text(title, 455, 322, 48, INK, True)
         self.text(f'{sum(gs.p1_hand)}  /  {sum(gs.p2_hand)}', 455, 398, 27, MUTED)
         self.text(self.t(f'玩家 1 / 玩家 2 · 本局伤害 {gs.round_damage}', f'Player 1 / Player 2 · Damage {gs.round_damage}'), 455, 447, 17, MUTED)
@@ -511,6 +547,7 @@ class App:
                 self.scene = 'waiting'
                 sound_events.append('connected')
             elif event == 'state':
+                self.history.ingest(value)
                 sound_events.extend(self.sound_tracker.update(value, self.pid))
                 latest = value
             elif event == 'mood':
@@ -523,6 +560,7 @@ class App:
                 self.sound_tracker.reset()
                 sound_events = ['error']
         if latest:
+            self.state_received_at = time.monotonic()
             token = (latest.round_id, tuple(getattr(latest, f'p{self.pid}_trumps')))
             if token != self.selection_token:
                 self.selected = None
@@ -545,6 +583,29 @@ class App:
             self.connection.events.put((self.connection.generation, 'error', 'connection'))
 
     def action(self, action):
+        if action in ('updates', 'timers', 'history'):
+            self.overlay = action
+            return
+        if action == 'close_overlay':
+            self.overlay = None
+            return
+        if action == 'check_update':
+            self.updater.start()
+            return
+        if action == 'download_update':
+            self.updater.start(download=True)
+            return
+        if action == 'launch_update' and self.updater.executable:
+            try:
+                subprocess.Popen([str(self.updater.executable)], cwd=self.updater.executable.parent,
+                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                self.running = False
+            except OSError as exc:
+                self.updater.status, self.updater.error = 'error', str(exc)
+            return
+        if action in ('log_prev', 'log_next'):
+            self.log_page = max(0, self.log_page+(-1 if action == 'log_prev' else 1))
+            return
         if action == 'audio_toggle':
             self.sound.toggle()
             self.sound.play('ui_click')
@@ -560,6 +621,17 @@ class App:
                 self.difficulty = value
             elif kind == 'style':
                 self.style = value
+            elif kind == 'timer':
+                config = load_timer(self.data_root)
+                presets = {
+                    'off': dict(enabled=False), '30s': dict(enabled=True, mode='turn', turn_seconds=30),
+                    '60s': dict(enabled=True, mode='turn', turn_seconds=60),
+                    '3+3': dict(enabled=True, mode='fischer', initial_minutes=3, increment_seconds=3),
+                    '5+3': dict(enabled=True, mode='fischer', initial_minutes=5, increment_seconds=3),
+                }
+                config.update(presets.get(value, {}))
+                self.timer = timer_config(config)
+                self.overlay = None
             return
         if action == 'language':
             self.zh = not self.zh
@@ -584,7 +656,7 @@ class App:
             self.host = action in ('host', 'solo_start')
             self.scene = 'connecting'
             self.connection.open('127.0.0.1' if self.host else self.ip.strip(), self.host,
-                                 (self.difficulty, self.style) if self.solo else None)
+                                 (self.difficulty, self.style) if self.solo else None, self.timer)
         elif action == 'menu':
             self.sound_tracker.reset()
             self.connection.close()
@@ -617,7 +689,68 @@ class App:
         elif action == 'book_next':
             self.book_page = min((len(CARDS)-1)//15, self.book_page+1)
 
+    def utility_panel(self):
+        self.buttons = []
+        shade = pg.Surface((W, H), pg.SRCALPHA)
+        shade.fill((4, 9, 8, 235))
+        self.canvas.blit(shade, (0, 0))
+        self.panel((100, 55, 1240, 790), PANEL, LINE, 22)
+        titles = {'updates': ('手动更新', 'MANUAL UPDATE'), 'timers': ('计时设置', 'TIME CONTROL'), 'history': ('战斗日志', 'ACTION LOG')}
+        self.text(self.t(*titles[self.overlay]), 136, 86, 32, INK, True)
+        self.button((1180, 82, 124, 44), self.t('关闭', 'Close'), 'close_overlay')
+        if self.overlay == 'timers':
+            self.wrap(self.t('房主统一计时；选择后用于下一场对局。双方入座才开始，结算时暂停。', 'The host controls the clock for the next match. Waiting and settlement do not consume time.'), pg.Rect(136, 145, 1120, 62), 19)
+            options = [('off', '不限时', 'No clock'), ('30s', '每次行动 30 秒', '30 seconds per turn'),
+                       ('60s', '每次行动 60 秒', '60 seconds per turn'), ('3+3', '棋钟 3 分钟 + 3 秒', '3 minutes + 3 seconds'),
+                       ('5+3', '棋钟 5 分钟 + 3 秒', '5 minutes + 3 seconds'), ('custom', '读取 timer.json 自定义', 'Load custom timer.json')]
+            for i, (key, zh, en) in enumerate(options):
+                self.button((136+(i%2)*584, 244+(i//2)*105, 558, 80), self.t(zh, en), ('timer', key))
+            mode = self.timer['mode'] if self.timer['enabled'] else 'off'
+            self.text(self.t('当前设置：', 'Current: ')+self.clock_label(), 136, 601, 22, GOLD)
+            self.wrap(self.t('单次行动 / 每局额度耗尽：自动停牌。棋钟耗尽：整场判负。\n3+3 表示每人整场 3 分钟，抽牌或停牌交接后加 3 秒。使用、弃置王牌不加秒。\ntimer.json 还可设置每位玩家每局独立时间额度（round）。', 'Turn or per-round timeout: automatic stay. Fischer timeout: match loss.\n3+3 gives each player 3 minutes, plus 3 seconds after handing over with HIT or STAY. Trumps and discards earn no increment.\nUse timer.json for custom times and per-round budgets.'), pg.Rect(136, 650, 1140, 155), 18)
+        elif self.overlay == 'history':
+            entries = list(reversed(self.history.entries))
+            pages = max(1, (len(entries)+11)//12)
+            self.log_page = min(self.log_page, pages-1)
+            self.text(self.t('最近动作在前 · 只包含公开信息 · 查看日志不暂停计时', 'Newest first · Public information only · The clock keeps running'), 136, 143, 18, MUTED)
+            for i, entry in enumerate(entries[self.log_page*12:self.log_page*12+12]):
+                y = 191+i*40
+                self.text(f'R{entry["round"]:02}', 138, y, 16, GOLD)
+                self.text(describe(entry, self.zh), 210, y, 18, INK, width=1080)
+            if not entries:
+                self.text(self.t('暂无日志；需要新版房主提供对局记录。', 'No history yet. A current host is needed to provide action logs.'), 138, 236, 20, MUTED)
+            self.text(self.t('日志保存失败；本次记录仍可在这里查看。', 'Could not save the file; history remains available here.') if self.history.error else self.t('自动保存到游戏目录的 logs 文件夹，可随问题反馈附上。', 'Automatically saved in the game’s logs folder for bug reports.'), 138, 696, 16, RED if self.history.error else MUTED)
+            self.button((136, 758, 150, 46), self.t('上一页', 'Previous'), 'log_prev', enabled=self.log_page > 0)
+            self.text(f'{self.log_page+1} / {pages}', 322, 770, 17, GOLD)
+            self.button((1153, 758, 150, 46), self.t('下一页', 'Next'), 'log_next', enabled=self.log_page+1 < pages)
+        else:
+            self.text(self.t('当前版本 ', 'Installed version ')+self.updater.current, 138, 155, 22, GOLD)
+            statuses = {
+                'idle': ('从你的 GitHub Release 检查新版本。', 'Check your GitHub Releases for a new version.'),
+                'checking': ('正在检查版本…', 'Checking for updates…'), 'downloading': ('正在下载、校验并准备新版…', 'Downloading, verifying and preparing the update…'),
+                'available': ('发现新版本：', 'New version: '), 'current': ('已经是最新版本。', 'You are up to date.'),
+                'installed': ('新版已准备好。打开后关闭当前窗口，旧版本仍保留。', 'The update is ready. Open it to close this window; the old version is preserved.'),
+                'error': ('更新未完成。', 'Update could not be completed.'),
+            }
+            status = self.t(*statuses[self.updater.status])
+            if self.updater.status == 'available':
+                status += self.updater.release['tag']
+            self.wrap(status, pg.Rect(138, 227, 1135, 90), 26, INK)
+            if self.updater.status == 'error':
+                errors = {'configure_repository': ('请在 updates.json 的 repository 填写发布仓库，例如 owner/repo。', 'Set repository in updates.json to your release repository, for example owner/repo.'),
+                          'missing_asset': ('该 Release 没有配置的 Windows 压缩包。', 'This release has no matching Windows archive.'),
+                          'missing_digest': ('该下载没有 SHA-256 校验值，已停止更新。', 'The asset has no SHA-256 digest. Update stopped.'),
+                          'checksum_failed': ('下载文件校验失败，旧版本未改动。', 'Checksum failed. The old version was not modified.')}
+                self.wrap(self.t(*errors.get(self.updater.error, ('请检查网络、公开仓库和 Release 配置后重试。', 'Check your network, public repository and release configuration, then retry.'))), pg.Rect(138, 330, 1120, 95), 20, RED)
+            self.wrap(self.t('下载源由 updates.json 指定。更新会校验 GitHub 提供的 SHA-256，并安装到独立的新目录。\n自动保留游戏、计时、声音、更新配置及 sounds 文件。新版本默认配置另存为 package-defaults。\n原程序与旧配置不被覆盖；更新失败时仍可继续使用当前版本。', 'The download source is set in updates.json. Archives are verified against GitHub’s SHA-256 and installed into a separate folder.\nGame, clock, audio and update settings and sounds are preserved. New defaults are kept in package-defaults.\nThe current program is never overwritten and remains usable if an update fails.'), pg.Rect(138, 471, 1125, 178), 19)
+            self.button((138, 711, 300, 61), self.t('检查更新', 'Check for updates'), 'check_update', enabled=not self.updater.busy)
+            if self.updater.status == 'available':
+                self.button((462, 711, 400, 61), self.t('下载并准备新版', 'Download and prepare'), 'download_update', True)
+            elif self.updater.status == 'installed':
+                self.button((462, 711, 400, 61), self.t('打开新版', 'Open updated version'), 'launch_update', True)
+
     def render(self):
+        self.updater.poll()
         self.buttons = []
         self.canvas.fill(BG)
         self.header()
@@ -636,6 +769,8 @@ class App:
             self.text(self.t('中文 / EN   ·   原版规则', '中文 / EN   ·   ORIGINAL RULES'), 1117, 875, 11, MUTED)
         if self.book:
             self.catalog()
+        if self.overlay:
+            self.utility_panel()
         if self.leave_prompt:
             self.buttons = []
             overlay = pg.Surface((W, H), pg.SRCALPHA)
@@ -676,7 +811,9 @@ class App:
                                 break
                     elif event.type == pg.KEYDOWN:
                         if event.key == pg.K_ESCAPE:
-                            if self.leave_prompt:
+                            if self.overlay:
+                                self.overlay = None
+                            elif self.leave_prompt:
                                 self.leave_prompt = False
                             elif self.book:
                                 self.book = False
@@ -726,10 +863,12 @@ if __name__ == '__main__':
     parser.add_argument('--screenshot', type=Path, help='Save the current UI and exit')
     parser.add_argument('--english', action='store_true')
     parser.add_argument('--server', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--timer', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.server:
         GameState.__module__ = '__main__'
-        engine.server_worker()
+        config_root = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else ROOT
+        server_worker(json.loads(args.timer) if args.timer else load_timer(config_root))
         sys.exit(0)
     app = App()
     app.zh = not args.english

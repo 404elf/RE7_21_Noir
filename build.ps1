@@ -1,4 +1,4 @@
-param([string]$OutputRoot = 'dist/audio-v1')
+param([string]$OutputRoot = 'dist/v1.3.0')
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $packageRoot = Join-Path $OutputRoot 'RE7_21_Noir'
@@ -19,3 +19,6 @@ Copy-Item -LiteralPath config.json -Destination $destination
 Copy-Item -LiteralPath README.md -Destination (Join-Path $packageRoot 'README.md')
 Copy-Item -LiteralPath audio.json -Destination (Join-Path $packageRoot 'audio.json')
 Copy-Item -LiteralPath sounds -Destination (Join-Path $packageRoot 'sounds') -Recurse
+foreach ($name in @('timer.json', 'updates.json', 'version.json')) {
+    Copy-Item -LiteralPath $name -Destination (Join-Path $packageRoot $name)
+}

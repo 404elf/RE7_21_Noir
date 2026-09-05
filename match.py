@@ -1,0 +1,194 @@
+"""Session orchestration: unchanged card engine plus authoritative clocks and history."""
+import json
+import math
+from pathlib import Path
+import time
+import uuid
+import re7_21 as engine
+
+DEFAULT_TIMER = dict(enabled=False, mode='turn', turn_seconds=30., round_seconds=120., initial_minutes=3., increment_seconds=3.)
+
+
+def timer_config(value):
+    config = dict(DEFAULT_TIMER)
+    if not isinstance(value, dict):
+        return config
+    config['enabled'] = value.get('enabled') is True
+    config['mode'] = value.get('mode') if value.get('mode') in ('turn', 'round', 'fischer') else 'turn'
+    for key, limit in [('turn_seconds', 3600), ('round_seconds', 86400), ('initial_minutes', 1440), ('increment_seconds', 300)]:
+        number = value.get(key, config[key])
+        if isinstance(number, (int, float)) and not isinstance(number, bool) and math.isfinite(number):
+            config[key] = max(0 if key == 'increment_seconds' else 1, min(limit, number))
+    return config
+
+
+def load_timer(root):
+    try:
+        return timer_config(json.loads((Path(root)/'timer.json').read_text(encoding='utf-8-sig')))
+    except (OSError, ValueError):
+        return dict(DEFAULT_TIMER)
+
+
+class Match:
+    def __init__(self, timer=None, monotonic=time.monotonic, wall=time.time):
+        self.monotonic, self.wall = monotonic, wall
+        self.timer = timer_config(timer)
+        self.gs = engine.GameState()
+        self.gs.end_reason = ''
+        self.last = monotonic()
+        self.log = []
+        self.sequence = 0
+        self.match_id = uuid.uuid4().hex
+        self.reset_clock()
+        self.record('round_start')
+        self.publish()
+
+    def record(self, event, pid=0, **details):
+        self.sequence += 1
+        self.log.append(dict(id=self.sequence, round=self.gs.round_id, event=event, pid=pid, **details))
+        self.log = self.log[-300:]
+
+    def reset_clock(self):
+        mode = self.timer['mode']
+        amount = self.timer['initial_minutes']*60 if mode == 'fischer' else self.timer[mode+'_seconds']
+        self.remaining = {1: float(amount), 2: float(amount)}
+
+    def publish(self):
+        self.gs.clock_config = self.timer.copy()
+        self.gs.clock_remaining = self.remaining.copy()
+        self.gs.clock_active = self.gs.turn if self.timer['enabled'] and self.gs.phase == 'ACTION' else 0
+        self.gs.action_log = list(self.log)
+        self.gs.match_id = self.match_id
+
+    def finish_round(self):
+        self.gs.resolve_round()
+        self.record('result', winner=self.gs.round_winner, damage=self.gs.round_damage,
+                    totals=[sum(self.gs.p1_hand), sum(self.gs.p2_hand)])
+
+    def tick(self):
+        now = self.monotonic()
+        elapsed = max(0, now-self.last)
+        self.last = now
+        gs = self.gs
+        if gs.phase == 'RESULT' and self.wall() > gs.result_timer:
+            if gs.p1_fingers <= 0 or gs.p2_fingers <= 0 or gs.is_escape_end:
+                gs.phase = 'GAMEOVER'
+                self.record('gameover', winner=gs.round_winner)
+            else:
+                gs.reset_round()
+                if self.timer['mode'] != 'fischer':
+                    self.reset_clock()
+                self.record('round_start')
+            self.publish()
+            return
+        if gs.phase == 'ACTION' and self.timer['enabled']:
+            self.remaining[gs.turn] = max(0, self.remaining[gs.turn]-elapsed)
+            for _ in range(2):
+                if gs.phase != 'ACTION' or self.remaining[gs.turn] > 0:
+                    break
+                pid = gs.turn
+                self.record('timeout', pid)
+                if self.timer['mode'] == 'fischer':
+                    setattr(gs, f'p{pid}_fingers', 0)
+                    gs.round_winner = 3-pid
+                    gs.round_damage = 0
+                    gs.phase = 'GAMEOVER'
+                    gs.end_reason = 'timeout'
+                    self.record('gameover', winner=3-pid, reason='timeout')
+                    break
+                self.stay(pid, automatic=True)
+        self.publish()
+
+    def handoff(self, pid, automatic=False):
+        if self.timer['enabled']:
+            if self.timer['mode'] == 'fischer' and not automatic:
+                self.remaining[pid] += self.timer['increment_seconds']
+            elif self.timer['mode'] == 'turn':
+                self.remaining[3-pid] = float(self.timer['turn_seconds'])
+        self.gs.turn = 3-pid
+
+    def stay(self, pid, automatic=False):
+        setattr(self.gs, f'p{pid}_stop', True)
+        self.record('stay', pid, automatic=automatic)
+        self.handoff(pid, automatic)
+        if self.gs.p1_stop and self.gs.p2_stop:
+            self.finish_round()
+        else:
+            self.gs.cleanup_player_instants(self.gs.turn)
+
+    def command(self, pid, message):
+        self.tick()  # Timeout wins over a late packet.
+        gs = self.gs
+        if pid not in (1, 2) or not isinstance(message, str):
+            return False
+        parts = message.split(':')
+        try:
+            if int(parts[-1]) != gs.round_id:
+                return False
+        except (ValueError, IndexError):
+            return False
+        cmd = parts[0]
+        if cmd == 'REMATCH' and gs.phase == 'GAMEOVER' and len(parts) == 2:
+            if not getattr(gs, f'p{pid}_req_rematch'):
+                setattr(gs, f'p{pid}_req_rematch', True)
+                self.record('rematch', pid)
+            if gs.p1_req_rematch and gs.p2_req_rematch:
+                gs.full_reset()
+                gs.end_reason = ''
+                self.log = []
+                self.match_id = uuid.uuid4().hex
+                self.reset_clock()
+                self.last = self.monotonic()
+                self.record('round_start')
+            self.publish()
+            return True
+        if gs.phase != 'ACTION' or gs.turn != pid or self.wall()-gs.last_action_time[pid] < .5:
+            return False
+        trumps = getattr(gs, f'p{pid}_trumps')
+        opponent = 3-pid
+        if cmd in ('TRUMP', 'DISCARD'):
+            if len(parts) != 3:
+                return False
+            try:
+                index = int(parts[1])
+            except ValueError:
+                return False
+            if not 0 <= index < len(trumps):
+                return False
+            card = trumps[index]
+        elif cmd not in ('HIT', 'STAY') or len(parts) != 2:
+            return False
+        if cmd == 'HIT':
+            if gs.check_bust(pid) or any(t['owner'] == opponent and t['type'] in ('GAMBLE', 'SILENCE') for t in gs.active_trumps):
+                return False
+            gs.draw_card(pid)
+            setattr(gs, f'p{pid}_stop', False)
+            self.record('hit', pid)  # No card values or hidden hands in the public log.
+            self.handoff(pid)
+            gs.cleanup_player_instants(gs.turn)
+        elif cmd == 'STAY':
+            self.stay(pid)
+        elif cmd == 'DISCARD':
+            gs.discard_trump(pid, index)
+            setattr(gs, f'p{pid}_stop', False)
+            self.record('discard', pid)  # A discarded trump is private.
+        elif cmd == 'TRUMP':
+            own = [t for t in gs.active_trumps if t['owner'] == pid]
+            if any(t['owner'] == opponent and t['type'] == 'DESTROY_BLOCK' for t in gs.active_trumps):
+                return False
+            if len(own) >= engine.MAX_TABLE_SLOTS:
+                if card[1] not in ('SHIELD_ATTACK', 'SHIELD_ATTACK_PLUS', 'OBLIVION') and not (card[1] == 'TARGET' and any(t['type'] == 'TARGET' for t in own)):
+                    return False
+            old_round = gs.round_id
+            self.record('trump', pid, card=card[0])
+            gs.use_trump(pid, index)
+            if any(t['owner'] == pid and t['type'] == 'HARVEST' for t in gs.active_trumps):
+                gs.give_trump(pid, 1)
+            setattr(gs, f'p{opponent}_stop', False)
+            if gs.round_id != old_round:
+                if self.timer['mode'] != 'fischer':
+                    self.reset_clock()
+                self.record('round_start')
+        gs.last_action_time[pid] = self.wall()
+        self.publish()
+        return True

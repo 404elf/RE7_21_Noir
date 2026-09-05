@@ -5,3 +5,5 @@ dist/
 build/
 *.spec
 *.log
+logs/
+updates/
