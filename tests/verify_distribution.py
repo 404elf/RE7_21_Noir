@@ -13,8 +13,8 @@ sys.path.insert(0, str(ROOT))
 from re7_21 import GameState, recv_msg, send_msg
 import pygame
 
-exe = ROOT/'dist/RE7_21_Noir/RE7_21_Noir.exe'
-screenshot = ROOT/'dist/packaged-preview.png'
+exe = ROOT/'dist/ai-v1/RE7_21_Noir/RE7_21_Noir.exe'
+screenshot = ROOT/'dist/ai-v1/packaged-preview.png'
 subprocess.run([str(exe), '--preview', '--screenshot', str(screenshot)], check=True, timeout=30)
 assert pygame.image.load(str(screenshot)).get_size() == (1440, 900)
 

@@ -17,6 +17,7 @@ import pygame as pg
 import re7_21 as engine
 from re7_21 import GameState  # legacy pickle compatibility: __main__.GameState
 from cards import CARDS, CATEGORIES, info
+from bot import BotSession, DIFFICULTIES, STYLES
 
 ROOT = Path(__file__).resolve().parent
 W, H = 1440, 900
@@ -38,12 +39,16 @@ class Connection:
         self.server = None
         self.generation = 0
         self.lock = threading.Lock()
+        self.bot = None
 
     def close(self):
         with self.lock:
             self.generation += 1
             sock, self.sock = self.sock, None
             server, self.server = self.server, None
+            bot, self.bot = self.bot, None
+        if bot:
+            bot.close()
         if sock:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
@@ -54,7 +59,7 @@ class Connection:
             server.terminate()
             server.wait(timeout=5)
 
-    def open(self, address, host=False):
+    def open(self, address, host=False, bot_options=None):
         self.close()
         generation = self.generation
 
@@ -90,6 +95,15 @@ class Connection:
                 if message not in ('ID:1', 'ID:2'):
                     raise ConnectionError('handshake')
                 self.events.put((generation, 'id', int(message[-1])))
+                if bot_options:
+                    with self.lock:
+                        if generation != self.generation:
+                            return
+                        self.bot = BotSession(
+                            *bot_options,
+                            on_error=lambda: self.events.put((generation, 'error', 'bot')),
+                            on_mood=lambda mood: self.events.put((generation, 'mood', mood)))
+                        self.bot.start()
                 connected.settimeout(None)
                 while generation == self.generation:
                     state = engine.recv_msg(connected)
@@ -144,6 +158,11 @@ class App:
         self.running = True
         self.viewport = pg.Rect(0, 0, 1280, 800)
         self.scale = 1280 / W
+        self.solo = False
+        self.difficulty = 'normal'
+        self.style = 'swing'
+        self.bot_mood = None
+        self.leave_prompt = False
 
     def t(self, zh, en):
         return zh if self.zh else en
@@ -209,6 +228,8 @@ class App:
         self.text(self.t('生存牌局', 'SURVIVAL TABLE'), 99, 55, 12, MUTED)
         self.button((1080, 27, 142, 42), self.t('卡牌图鉴', 'Card guide'), 'book')
         self.button((1234, 27, 174, 42), '中文  /  EN', 'language')
+        if self.solo and self.scene == 'game' and not self.demo:
+            self.button((900, 27, 164, 42), self.t('结束练习', 'End practice'), 'leave')
         pg.draw.line(self.canvas, LINE, (32, 88), (1408, 88))
 
     def number_card(self, value, x, y, width=83, height=113, hidden=False, secret=False):
@@ -240,8 +261,9 @@ class App:
         self.panel((780, 144, 590, 654))
         self.text(self.t('入 座', 'TAKE A SEAT'), 820, 178, 30, INK, True)
         self.text(self.t('邀请一位对手，开始今晚的牌局。', 'One table. Two players. Your next move.'), 822, 231, 17, MUTED)
-        self.button((822, 285, 506, 60), self.t('创建房间   →', 'Create room   →'), 'host', True)
-        self.text(self.t('房主设置决定本局规则', 'The host’s settings define the rules'), 822, 360, 15, MUTED)
+        self.button((822, 285, 244, 60), self.t('人机对战   →', 'Play against AI   →'), 'solo_setup', True)
+        self.button((1082, 285, 246, 60), self.t('创建联机房间', 'Host multiplayer'), 'host')
+        self.text(self.t('独自练习，或邀请朋友加入牌局', 'Practice solo or invite a friend to the table'), 822, 360, 15, MUTED)
         pg.draw.line(self.canvas, LINE, (822, 402), (1328, 402))
         self.text(self.t('加入已有房间', 'JOIN AN EXISTING ROOM'), 822, 426, 16, GOLD)
         self.text(self.t('房主 IP 地址', 'Host IP address'), 822, 471, 16, MUTED)
@@ -253,12 +275,33 @@ class App:
         if self.error:
             self.wrap(self.error, pg.Rect(822, 716, 506, 64), 16, RED)
 
+    def solo_setup(self):
+        self.text(self.t('人机对战', 'PLAY AGAINST AI'), 180, 129, 38, INK, True)
+        self.text(self.t('选择实力，再选择性格。每一位对手，都有自己的节奏。', 'Choose their skill. Choose their character. Find your next rival.'), 182, 186, 20, MUTED)
+        self.text(self.t('01 / 难度', '01 / DIFFICULTY'), 183, 246, 17, GOLD)
+        for i, (key, values) in enumerate(DIFFICULTIES.items()):
+            rect = pg.Rect(180+i*370, 284, 340, 151)
+            self.panel(rect, PANEL, GOLD if self.difficulty == key else LINE)
+            self.text(self.t(values[0], values[1]), rect.x+24, rect.y+21, 25, INK, True)
+            self.wrap(self.t(values[2], values[3]), pg.Rect(rect.x+24, rect.y+71, 292, 63), 17)
+            self.buttons.append((rect, ('difficulty', key)))
+        self.text(self.t('02 / 打法风格', '02 / PLAY STYLE'), 183, 470, 17, GOLD)
+        for i, (key, values) in enumerate(STYLES.items()):
+            rect = pg.Rect(180+i*370, 508, 340, 162)
+            self.panel(rect, PANEL, GOLD if self.style == key else LINE)
+            self.text(self.t(values[0], values[1]), rect.x+24, rect.y+21, 25, INK, True)
+            self.wrap(self.t(values[2], values[3]), pg.Rect(rect.x+24, rect.y+70, 292, 79), 17)
+            self.buttons.append((rect, ('style', key)))
+        self.button((180, 714, 245, 58), self.t('返回大厅', 'Back to lobby'), 'menu')
+        self.button((445, 714, 815, 58), self.t('开始对战   →', 'Start practice   →'), 'solo_start', True)
+        self.text(self.t('公平对局 · AI 看不到你的暗牌 · 沿用你的自定义规则', 'Fair play · AI cannot see your hidden card · Your custom rules apply'), 183, 802, 17, MUTED)
+
     def waiting(self):
         self.panel((350, 240, 740, 390))
         self.text('· · ·', 661, 276, 48, GOLD)
-        title = self.t('等待对手入座', 'Waiting for an opponent') if self.scene == 'waiting' else self.t('正在连接房间', 'Connecting to the room')
+        title = self.t('正在准备 AI 对手', 'Preparing your AI opponent') if self.solo else self.t('等待对手入座', 'Waiting for an opponent') if self.scene == 'waiting' else self.t('正在连接房间', 'Connecting to the room')
         self.text(title, 420, 362, 34, INK, True)
-        self.wrap(self.t('让对手输入你的局域网或虚拟 IP，即可加入牌局。', 'Ask your opponent to join using your LAN or virtual IP address.') if self.host else self.t('连接成功后，双方入座便会自动开始。', 'The game starts automatically when both players are seated.'), pg.Rect(420, 424, 600, 80), 19)
+        self.wrap(self.t('对手即将入座，无需邀请其他玩家。', 'Your opponent will take the second seat automatically.') if self.solo else self.t('让对手输入你的局域网或虚拟 IP，即可加入牌局。', 'Ask your opponent to join using your LAN or virtual IP address.') if self.host else self.t('连接成功后，双方入座便会自动开始。', 'The game starts automatically when both players are seated.'), pg.Rect(420, 424, 600, 80), 19)
         self.button((420, 548, 600, 48), self.t('取消并返回', 'Cancel and return'), 'menu')
 
     def health(self, value, maximum, x, y, width=145):
@@ -291,12 +334,19 @@ class App:
         my_hp = getattr(gs, f'p{self.pid}_fingers')
         opp_hp = getattr(gs, f'p{3-self.pid}_fingers')
         self.text(self.t(f'第 {gs.round_id:02} 回合', f'ROUND {gs.round_id:02}'), 34, 110, 18, MUTED)
+        if self.solo:
+            difficulty = DIFFICULTIES[self.difficulty][0 if self.zh else 1]
+            style = STYLES[self.style][0 if self.zh else 1]
+            mood = ''
+            if self.style == 'swing' and self.bot_mood:
+                mood = ' / '+STYLES[self.bot_mood][0 if self.zh else 1]
+            self.text(f'AI · {difficulty} · {style}{mood}', 230, 112, 16, GOLD, width=565)
         turn = self.t('你的行动', 'YOUR TURN') if gs.turn == self.pid else self.t('对手行动中', 'OPPONENT’S TURN')
         if gs.phase != 'ACTION':
             turn = self.t('本局结算', 'ROUND RESULT')
         self.text(turn, 824, 110, 18, GOLD)
         self.panel((32, 151, 978, 479), (23, 39, 36), (54, 74, 65), 24)
-        self.text(self.t('对手', 'OPPONENT'), 60, 175, 20, INK, True)
+        self.text(self.t('AI 对手', 'AI OPPONENT') if self.solo else self.t('对手', 'OPPONENT'), 60, 175, 20, INK, True)
         self.text(f'{max(0, opp_hp)} / {gs.max_hp_limit}', 60, 211, 18, MUTED)
         self.health(opp_hp, gs.max_hp_limit, 60, 245)
         opp_total = f'? + {sum(theirs[1:])}' if gs.phase == 'ACTION' else str(sum(theirs))
@@ -452,6 +502,8 @@ class App:
                 self.scene = 'waiting'
             elif event == 'state':
                 latest = value
+            elif event == 'mood':
+                self.bot_mood = value
             elif event == 'error':
                 self.connection.close()
                 self.scene = 'menu'
@@ -484,6 +536,10 @@ class App:
                 self.selected = value
             elif kind == 'inspect':
                 self.book_selected = value
+            elif kind == 'difficulty':
+                self.difficulty = value
+            elif kind == 'style':
+                self.style = value
             return
         if action == 'language':
             self.zh = not self.zh
@@ -492,22 +548,34 @@ class App:
         elif action == 'focus':
             self.focus = True
             self.replace_input = True
-        elif action in ('host', 'join'):
+        elif action == 'solo_setup':
+            self.scene = 'solo_setup'
+            self.focus = False
+        elif action in ('host', 'join', 'solo_start'):
             self.error = ''
             self.gs = None
             self.selected = None
             self.page = 0
             self.focus = False
             self.demo = False
-            self.host = action == 'host'
+            self.solo = action == 'solo_start'
+            self.bot_mood = None
+            self.host = action in ('host', 'solo_start')
             self.scene = 'connecting'
-            self.connection.open('127.0.0.1' if self.host else self.ip.strip(), self.host)
+            self.connection.open('127.0.0.1' if self.host else self.ip.strip(), self.host,
+                                 (self.difficulty, self.style) if self.solo else None)
         elif action == 'menu':
             self.connection.close()
             self.gs = None
             self.demo = False
             self.scene = 'menu'
             self.error = ''
+            self.solo = False
+            self.leave_prompt = False
+        elif action == 'leave':
+            self.leave_prompt = True
+        elif action == 'continue':
+            self.leave_prompt = False
         elif action == 'hit':
             self.command('HIT')
         elif action == 'stay':
@@ -533,6 +601,8 @@ class App:
         self.header()
         if self.scene == 'menu':
             self.menu()
+        elif self.scene == 'solo_setup':
+            self.solo_setup()
         elif self.scene in ('connecting', 'waiting'):
             self.waiting()
         else:
@@ -544,6 +614,16 @@ class App:
             self.text(self.t('中文 / EN   ·   原版规则', '中文 / EN   ·   ORIGINAL RULES'), 1117, 875, 11, MUTED)
         if self.book:
             self.catalog()
+        if self.leave_prompt:
+            self.buttons = []
+            overlay = pg.Surface((W, H), pg.SRCALPHA)
+            overlay.fill((5, 10, 10, 210))
+            self.canvas.blit(overlay, (0, 0))
+            self.panel((420, 300, 600, 278), PANEL, GOLD)
+            self.text(self.t('结束这场练习？', 'End this practice game?'), 456, 339, 29, INK, True)
+            self.text(self.t('本次对局进度不会保留。', 'This game’s progress will not be saved.'), 456, 404, 18, MUTED)
+            self.button((456, 482, 246, 54), self.t('继续对战', 'Keep playing'), 'continue', True)
+            self.button((722, 482, 260, 54), self.t('返回大厅', 'Return to lobby'), 'menu')
 
     def present(self):
         size = self.window.get_size()
@@ -574,7 +654,9 @@ class App:
                                 break
                     elif event.type == pg.KEYDOWN:
                         if event.key == pg.K_ESCAPE:
-                            if self.book:
+                            if self.leave_prompt:
+                                self.leave_prompt = False
+                            elif self.book:
                                 self.book = False
                             else:
                                 self.focus = False
