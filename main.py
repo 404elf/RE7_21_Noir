@@ -18,6 +18,7 @@ import re7_21 as engine
 from re7_21 import GameState  # legacy pickle compatibility: __main__.GameState
 from cards import CARDS, CATEGORIES, info
 from bot import BotSession, DIFFICULTIES, STYLES
+from sound import SoundManager, SoundTracker
 
 ROOT = Path(__file__).resolve().parent
 W, H = 1440, 900
@@ -129,6 +130,9 @@ class Connection:
 class App:
     def __init__(self):
         pg.init()
+        audio_root = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else ROOT
+        self.sound = SoundManager(audio_root)
+        self.sound_tracker = SoundTracker()
         self.window = pg.display.set_mode((1280, 800), pg.RESIZABLE)
         pg.display.set_caption('RE7 · 21 | NOIR')
         self.canvas = pg.Surface((W, H))
@@ -228,6 +232,10 @@ class App:
         self.text(self.t('生存牌局', 'SURVIVAL TABLE'), 99, 55, 12, MUTED)
         self.button((1080, 27, 142, 42), self.t('卡牌图鉴', 'Card guide'), 'book')
         self.button((1234, 27, 174, 42), '中文  /  EN', 'language')
+        sound_label = self.t('音效：开', 'Sound: on') if self.sound.enabled else self.t('音效：关', 'Sound: off')
+        if not self.sound.available:
+            sound_label = self.t('音效不可用', 'No audio device')
+        self.button((722, 27, 162, 42), sound_label, 'audio_toggle', enabled=self.sound.available)
         if self.solo and self.scene == 'game' and not self.demo:
             self.button((900, 27, 164, 42), self.t('结束练习', 'End practice'), 'leave')
         pg.draw.line(self.canvas, LINE, (32, 88), (1408, 88))
@@ -490,6 +498,7 @@ class App:
 
     def receive(self):
         latest = None
+        sound_events = []
         while True:
             try:
                 generation, event, value = self.connection.events.get_nowait()
@@ -500,7 +509,9 @@ class App:
             if event == 'id':
                 self.pid = value
                 self.scene = 'waiting'
+                sound_events.append('connected')
             elif event == 'state':
+                sound_events.extend(self.sound_tracker.update(value, self.pid))
                 latest = value
             elif event == 'mood':
                 self.bot_mood = value
@@ -509,6 +520,8 @@ class App:
                 self.scene = 'menu'
                 self.error = self.t('端口 6666 已被占用，请关闭已有房间。', 'Port 6666 is in use. Close the existing room.') if value == 'port' else self.t('连接已中断或失败，请确认房主 IP、组网和房间状态。', 'Connection failed or closed. Check the host IP, network and room.')
                 latest = None
+                self.sound_tracker.reset()
+                sound_events = ['error']
         if latest:
             token = (latest.round_id, tuple(getattr(latest, f'p{self.pid}_trumps')))
             if token != self.selection_token:
@@ -518,6 +531,7 @@ class App:
             self.scene = 'game'
             if latest.phase == 'ACTION':
                 self.rematch = False
+        self.sound.play_many(sound_events)
 
     def command(self, name):
         if self.demo or not self.gs:
@@ -525,11 +539,17 @@ class App:
         if name != 'REMATCH' and not self.can_act():
             return
         if self.connection.send(name, self.gs.round_id):
+            self.sound_tracker.sent(name, self.gs, self.pid)
             self.cooldown = time.monotonic()+.55
         else:
             self.connection.events.put((self.connection.generation, 'error', 'connection'))
 
     def action(self, action):
+        if action == 'audio_toggle':
+            self.sound.toggle()
+            self.sound.play('ui_click')
+            return
+        self.sound.play('card_select' if isinstance(action, tuple) and action[0] in ('select', 'inspect') else 'ui_click')
         if isinstance(action, tuple):
             kind, value = action
             if kind == 'select':
@@ -552,6 +572,7 @@ class App:
             self.scene = 'solo_setup'
             self.focus = False
         elif action in ('host', 'join', 'solo_start'):
+            self.sound_tracker.reset()
             self.error = ''
             self.gs = None
             self.selected = None
@@ -565,6 +586,7 @@ class App:
             self.connection.open('127.0.0.1' if self.host else self.ip.strip(), self.host,
                                  (self.difficulty, self.style) if self.solo else None)
         elif action == 'menu':
+            self.sound_tracker.reset()
             self.connection.close()
             self.gs = None
             self.demo = False

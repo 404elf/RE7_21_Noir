@@ -1,0 +1,31 @@
+{
+  "_comment": "音效独立配置；每位玩家只影响自己的声音。修改后重启游戏。音量范围 0.0–1.0。",
+  "enabled": true,
+  "master_volume": 0.65,
+  "ui_volume": 0.45,
+  "game_volume": 0.75,
+  "result_volume": 0.8,
+  "_comment_events": "file 相对于此配置文件，可替换为自己的 WAV / OGG 文件。单项 enabled=false 关闭该音效；volume 为该项音量倍率。",
+  "events": {
+    "ui_click": { "file": "sounds/ui_click.wav", "enabled": true, "volume": 1.0 },
+    "card_select": { "file": "sounds/card_select.wav", "enabled": true, "volume": 1.0 },
+    "connected": { "file": "sounds/connected.wav", "enabled": true, "volume": 1.0 },
+    "round_start": { "file": "sounds/round_start.wav", "enabled": true, "volume": 1.0 },
+    "card_draw": { "file": "sounds/card_draw.wav", "enabled": true, "volume": 1.0 },
+    "card_move": { "file": "sounds/card_move.wav", "enabled": true, "volume": 1.0 },
+    "trump_play": { "file": "sounds/trump_play.wav", "enabled": true, "volume": 1.0 },
+    "trump_change": { "file": "sounds/trump_change.wav", "enabled": true, "volume": 1.0 },
+    "card_discard": { "file": "sounds/card_discard.wav", "enabled": true, "volume": 1.0 },
+    "stay": { "file": "sounds/stay.wav", "enabled": true, "volume": 1.0 },
+    "your_turn": { "file": "sounds/your_turn.wav", "enabled": true, "volume": 1.0 },
+    "bust": { "file": "sounds/bust.wav", "enabled": true, "volume": 1.0 },
+    "damage": { "file": "sounds/damage.wav", "enabled": true, "volume": 1.0 },
+    "error": { "file": "sounds/error.wav", "enabled": true, "volume": 1.0 },
+    "round_win": { "file": "sounds/round_win.wav", "enabled": true, "volume": 1.0 },
+    "round_loss": { "file": "sounds/round_loss.wav", "enabled": true, "volume": 1.0 },
+    "round_draw": { "file": "sounds/round_draw.wav", "enabled": true, "volume": 1.0 },
+    "game_win": { "file": "sounds/game_win.wav", "enabled": true, "volume": 1.0 },
+    "game_loss": { "file": "sounds/game_loss.wav", "enabled": true, "volume": 1.0 },
+    "game_draw": { "file": "sounds/game_draw.wav", "enabled": true, "volume": 1.0 }
+  }
+}

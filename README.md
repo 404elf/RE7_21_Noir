@@ -48,6 +48,40 @@ python -m venv .venv
 
 Windows 人机版本位于 `dist/ai-v1/RE7_21_Noir/`，与旧版打包结果分别保存；源码启动仍可使用 `start.cmd`。
 
+## 音效与自定义
+
+内置 20 种短音效，无需联网。窗口右上角「音效：开 / 关」可临时静音；永久设置在游戏目录的 **`audio.json`** 中，修改后重启。打包版的配置在 EXE 同目录，源码版在 `main.py` 同目录。声音是每位玩家的本地偏好，不会被房主同步或随游戏规则预设切换。
+
+- `enabled`：总开关，`false` 为静音。
+- `master_volume`：总音量，范围 `0.0–1.0`。
+- `ui_volume` / `game_volume` / `result_volume`：界面、对局、结算分类音量。
+- `events`：每种事件的 `enabled`、`volume` 和 `file`。最终音量为总音量 × 分类音量 × 单项音量。
+
+| 事件名 | 触发时机 |
+| --- | --- |
+| `ui_click` / `card_select` | 点击按钮 / 选择或查看卡牌 |
+| `connected` / `round_start` | 连接成功 / 新回合发牌 |
+| `card_draw` / `card_move` | 抽取数字牌 / 退回、交换等牌面变动 |
+| `trump_play` / `card_discard` | 服务器确认自己使用王牌 / 弃牌 |
+| `trump_change` | 其他可见的王牌数量或手牌变动 |
+| `stay` / `your_turn` | 玩家停牌 / 轮到自己行动 |
+| `bust` / `damage` | 自己首次爆牌 / 自己受到伤害 |
+| `error` | 连接失败或中断 |
+| `round_win` / `round_loss` / `round_draw` | 单回合胜 / 负 / 平 |
+| `game_win` / `game_loss` / `game_draw` | 整场游戏胜 / 负 / 平 |
+
+例如，将自己的提示音放入 `sounds/my_turn.wav`，在 `audio.json` 的 `events` 中修改对应项：
+
+```json
+"your_turn": { "file": "sounds/my_turn.wav", "enabled": true, "volume": 0.7 }
+```
+
+`file` 相对于 `audio.json` 所在目录，也支持绝对路径；推荐 WAV 或 OGG。把音效文件与配置一起发给另一台电脑时，使用相对路径更方便。删除某个事件配置会恢复该事件的默认文件，禁用应设 `enabled: false`；不存在或无法解码的自定义音效会跳过，不会阻止游戏继续。缺少配置时使用默认值，配置格式错误时回退默认值。音频设备不可用时界面显示「音效不可用」。
+
+声音按状态变化触发，不随画面或网络刷新重复播放。一个刷新批次出现多个事件时优先播放重要提示（例如爆牌或结算），防止声音堆叠；受伤冲击声可伴随结算提示。旧协议无法区分对手所有出牌动作，因此对手的王牌变动使用通用提示，不根据其暗牌推断音效。
+
+新打包版位于 `dist/audio-v1/RE7_21_Noir/`，包含 `audio.json` 与完整 `sounds/` 文件夹，旧人机版本仍独立保留。所有默认音效由 `tools/generate_sounds.py` 原创合成，可用 `--output` 指定新目录重新生成，工具不会覆盖已有音效。
+
 ## 配置与保留范围
 
 - `re7_21.py` 是原仓库源码的逐字节副本，包括原 UI，SHA-256：`d96649c329fb5c80c21246acbe779cc4b56bedbcc96f648468b98696e11fb1e7`。
