@@ -24,17 +24,18 @@ from match import load_timer, timer_config
 from session_server import server_worker
 from updater import Updater
 from history import History, describe
+from horror_theme import HorrorTheme
 
 ROOT = Path(__file__).resolve().parent
 W, H = 1440, 900
-BG = (15, 20, 21)
-PANEL = (24, 31, 32)
-LINE = (49, 60, 59)
-INK = (232, 230, 218)
-MUTED = (146, 159, 155)
-GOLD = (210, 184, 126)
-GREEN = (119, 180, 162)
-RED = (218, 126, 113)
+BG = (12, 10, 9)
+PANEL = (26, 23, 20)
+LINE = (78, 62, 48)
+INK = (229, 220, 201)
+MUTED = (165, 152, 133)
+GOLD = (205, 172, 120)
+GREEN = (184, 146, 107)
+RED = (232, 104, 83)
 
 
 class Connection:
@@ -148,8 +149,9 @@ class App:
         self.log_page = 0
         self.state_received_at = time.monotonic()
         self.window = pg.display.set_mode((1280, 800), pg.RESIZABLE)
-        pg.display.set_caption('RE7 · 21 | NOIR')
+        pg.display.set_caption('RE7 · 21 | THE BASEMENT')
         self.canvas = pg.Surface((W, H))
+        self.theme = HorrorTheme((W, H))
         self.clock = pg.time.Clock()
         self.fonts = {}
         self.zh = True
@@ -230,19 +232,19 @@ class App:
             self.text(line, rect.x, y, size, color)
 
     def panel(self, rect, fill=PANEL, border=LINE, radius=16):
-        pg.draw.rect(self.canvas, fill, rect, border_radius=radius)
-        if border:
-            pg.draw.rect(self.canvas, border, rect, 1, border_radius=radius)
+        rect = pg.Rect(rect)
+        if rect.w > 0 and rect.h > 0:
+            self.canvas.blit(self.theme.panel(rect.size, fill, border), rect)
 
     def button(self, rect, label, action, primary=False, enabled=True, danger=False):
         rect = pg.Rect(rect)
         hovered = rect.collidepoint(self.mouse)
-        fill = GOLD if primary else (34, 44, 44)
-        color = BG if primary else (RED if danger else INK)
+        fill = (107, 29, 23) if primary else (34, 29, 25)
+        color = INK if primary else (RED if danger else INK)
         if hovered and enabled:
-            fill = (226, 203, 157) if primary else (47, 60, 59)
+            fill = (145, 39, 28) if primary else (53, 43, 33)
         if not enabled:
-            fill, color = (29, 36, 36), (98, 109, 106)
+            fill, color = (26, 23, 21), (111, 100, 86)
         self.panel(rect, fill, GOLD if primary and enabled else LINE, 9)
         surf = self.font(18, True).render(label, True, color)
         self.canvas.blit(surf, surf.get_rect(center=rect.center))
@@ -251,8 +253,8 @@ class App:
 
     def header(self):
         self.text('21', 32, 20, 40, GOLD, True)
-        self.text('RE7 / NOIR', 98, 29, 20, INK, True)
-        self.text(self.t('生存牌局', 'SURVIVAL TABLE'), 99, 55, 12, MUTED)
+        self.text('RE7 / 21', 98, 29, 20, INK, True)
+        self.text(self.t('地下室 · 生存牌局', 'THE BASEMENT'), 99, 55, 12, RED)
         if self.scene == 'menu':
             self.button((300, 27, 120, 42), self.t('手动更新', 'Updates'), 'updates')
         if self.scene in ('menu', 'solo_setup'):
@@ -271,24 +273,26 @@ class App:
 
     def number_card(self, value, x, y, width=83, height=113, hidden=False, secret=False):
         rect = pg.Rect(x, y, width, height)
-        self.panel(rect.move(0, 5), (9, 14, 14), None, 9)
-        self.panel(rect, (40, 65, 61) if hidden else (224, 219, 203), (106, 128, 114) if hidden else (242, 232, 206), 9)
+        self.panel(rect.move(3, 6), (5, 4, 3), None, 9)
+        self.panel(rect, (67, 24, 19) if hidden else (199, 182, 146), (120, 65, 42) if hidden else (142, 117, 81), 9)
         if hidden:
-            pg.draw.rect(self.canvas, (87, 119, 103), rect.inflate(-12, -12), 1, border_radius=5)
+            pg.draw.rect(self.canvas, (129, 66, 44), rect.inflate(-12, -12), 1)
+            for dy in range(12, height-12, 10):
+                pg.draw.line(self.canvas, (79, 32, 24), (x+9, y+dy), (x+width-9, y+dy+6))
             cx, cy = rect.center
             pg.draw.polygon(self.canvas, GOLD, [(cx, cy-25), (cx+17, cy), (cx, cy+25), (cx-17, cy)], 1)
             self.text('?', cx-7, cy-13, 22, GOLD)
         else:
-            self.text(value, x+10, y+6, 17, (60, 69, 62), True)
-            surf = self.font(min(42, height//3), True).render(str(value), True, (37, 51, 47))
+            self.text(value, x+10, y+6, 17, (70, 39, 25), True)
+            surf = self.font(min(42, height//3), True).render(str(value), True, (49, 24, 17))
             self.canvas.blit(surf, surf.get_rect(center=rect.center))
-            self.text(self.t('暗牌', 'HIDDEN') if secret else '· 21 ·', x+10, y+height-24, 11, (91, 100, 87))
+            self.text(self.t('暗牌', 'HIDDEN') if secret else '· 21 ·', x+10, y+height-24, 11, (93, 65, 43))
 
     def menu(self):
-        self.text(self.t('每一张牌，都是一次抉择。', 'EVERY CARD IS A CHOICE.'), 70, 151, 18, GOLD)
-        self.text(self.t('二十一点', 'TWENTY ONE'), 64, 192, 70, INK, True)
-        self.text(self.t('赌上下一回合。', 'Stay in the game.'), 70, 296, 32, MUTED)
-        self.wrap(self.t('在逼近目标与保全生命之间，打出你的答案。\n双人联机 · 自定义规则 · 王牌博弈', 'Walk the line between the perfect hand and survival.\nTwo players. Custom rules. A hand full of possibilities.'), pg.Rect(72, 369, 590, 115), 20)
+        self.text(self.t('地下室录像 / 最后一场游戏', 'BASEMENT TAPE / THE LAST GAME'), 70, 151, 17, RED)
+        self.text(self.t('生 死 二 十 一', 'TWENTY ONE'), 64, 206, 64, INK, True)
+        self.text(self.t('下一张，可能就是代价。', 'Every hand has a price.'), 70, 310, 29, RED)
+        self.wrap(self.t('灯还亮着。牌已经发下。\n靠近二十一点，或者把命运交给下一张牌。', 'The light is still on. The cards are dealt.\nGet close to twenty-one. Leave the rest to chance.'), pg.Rect(72, 379, 590, 105), 20)
         self.number_card(7, 105, 518, 142, 193)
         self.number_card(3, 272, 492, 142, 193, hidden=True)
         self.number_card(11, 439, 518, 142, 193)
@@ -296,8 +300,8 @@ class App:
         self.text('02 / ADAPT', 282, 760, 14, MUTED)
         self.text('03 / OUTPLAY', 476, 760, 14, MUTED)
         self.panel((780, 144, 590, 654))
-        self.text(self.t('入 座', 'TAKE A SEAT'), 820, 178, 30, INK, True)
-        self.text(self.t('邀请一位对手，开始今晚的牌局。', 'One table. Two players. Your next move.'), 822, 231, 17, MUTED)
+        self.text(self.t('欢迎来到游戏', 'WELCOME TO THE GAME'), 820, 178, 28, INK, True)
+        self.text(self.t('坐下。看看谁能撑到最后。', 'Take a seat. See who makes it out.'), 822, 231, 17, MUTED)
         self.button((822, 285, 244, 60), self.t('人机对战   →', 'Play against AI   →'), 'solo_setup', True)
         self.button((1082, 285, 246, 60), self.t('创建联机房间', 'Host multiplayer'), 'host')
         self.text(self.t('房主计时：', 'Host clock: ')+self.clock_label(), 822, 360, 15, MUTED)
@@ -342,7 +346,7 @@ class App:
         self.button((420, 548, 600, 48), self.t('取消并返回', 'Cancel and return'), 'menu')
 
     def health(self, value, maximum, x, y, width=145):
-        self.panel((x, y, width, 5), (44, 53, 50), None, 2)
+        self.panel((x, y, width, 5), (51, 27, 23), None, 2)
         ratio = max(0, min(1, value / max(1, maximum)))
         if ratio:
             pg.draw.rect(self.canvas, GREEN if ratio > .3 else RED, (x, y, max(1, int(width*ratio)), 5), border_radius=2)
@@ -382,7 +386,7 @@ class App:
         if gs.phase != 'ACTION':
             turn = self.t('本局结算', 'ROUND RESULT')
         self.text(turn, 824, 110, 18, GOLD)
-        self.panel((32, 151, 978, 479), (23, 39, 36), (54, 74, 65), 24)
+        self.panel((32, 151, 978, 479), (33, 27, 21), (93, 66, 43), 24)
         self.text(self.t('AI 对手', 'AI OPPONENT') if self.solo else self.t('对手', 'OPPONENT'), 60, 175, 20, INK, True)
         self.text(f'{max(0, opp_hp)} / {gs.max_hp_limit}', 60, 211, 18, MUTED)
         self.health(opp_hp, gs.max_hp_limit, 60, 245)
@@ -391,7 +395,7 @@ class App:
         self.text(self.t('明牌点数', 'VISIBLE TOTAL') if gs.phase == 'ACTION' else self.t('总点数', 'TOTAL'), 838, 230, 13, MUTED)
         self.hand(theirs, 236, 176, 580, True)
         self.text(self.t('已停牌', 'STAYING') if getattr(gs, f'p{3-self.pid}_stop') else self.t('王牌', 'TRUMPS')+f' · {len(getattr(gs, f"p{3-self.pid}_trumps"))}', 60, 274, 15, MUTED)
-        pg.draw.line(self.canvas, (48, 70, 61), (60, 322), (982, 322))
+        pg.draw.line(self.canvas, (82, 56, 38), (60, 322), (982, 322))
         self.text(self.t('场上效果', 'TABLE EFFECTS'), 60, 339, 14, MUTED)
         active = gs.active_trumps
         table_page = int(time.monotonic()/5) % max(1, (len(active)+5)//6)
@@ -403,7 +407,7 @@ class App:
             self.text(f'{owner} · {name}', x, y, 15, GREEN if card['owner'] == self.pid else RED, width=240)
         if not active:
             self.text(self.t('暂无持续效果', 'No active effects'), 236, 339, 16, MUTED)
-        pg.draw.line(self.canvas, (48, 70, 61), (60, 411), (982, 411))
+        pg.draw.line(self.canvas, (82, 56, 38), (60, 411), (982, 411))
         self.text(self.t('你', 'YOU'), 60, 439, 20, INK, True)
         self.text(f'{max(0, my_hp)} / {gs.max_hp_limit}', 60, 477, 18, MUTED)
         self.health(my_hp, gs.max_hp_limit, 60, 513)
@@ -434,7 +438,7 @@ class App:
         zh, category, _, _ = info(name)
         cat_zh, cat_en, color, symbol = CATEGORIES[category]
         hover = rect.collidepoint(self.mouse)
-        self.panel(rect, (36, 44, 42) if selected or hover else PANEL, GOLD if selected else LINE, 12)
+        self.panel(rect, (59, 32, 24) if selected or hover else PANEL, RED if selected else LINE, 12)
         pg.draw.line(self.canvas, color, (rect.x+16, rect.y+1), (rect.right-16, rect.y+1), 2)
         self.text(cat_zh if self.zh else cat_en, rect.x+14, rect.y+13, 12, color)
         self.text(symbol, rect.right-38, rect.y+7, 24, color)
@@ -492,7 +496,7 @@ class App:
         overlay = pg.Surface((W, H), pg.SRCALPHA)
         overlay.fill((5, 10, 10, 185))
         self.canvas.blit(overlay, (0, 89))
-        self.panel((412, 247, 616, 394), (26, 36, 33), GOLD, 22)
+        self.panel((412, 247, 616, 394), (35, 24, 20), RED, 22)
         title = self.t('平 局', 'DRAW') if gs.round_winner == 0 else self.t('本局获胜', 'ROUND WON') if gs.round_winner == self.pid else self.t('本局落败', 'ROUND LOST')
         self.text(self.t('棋钟耗尽 · 判负', 'TIME FORFEIT') if getattr(gs, 'end_reason', '') == 'timeout' else self.t('牌 局 结 算', 'THE TABLE HAS SPOKEN'), 455, 278, 16, GOLD)
         self.text(title, 455, 322, 48, INK, True)
@@ -752,7 +756,7 @@ class App:
     def render(self):
         self.updater.poll()
         self.buttons = []
-        self.canvas.fill(BG)
+        self.canvas.blit(self.theme.background, (0, 0))
         self.header()
         if self.scene == 'menu':
             self.menu()
@@ -762,7 +766,7 @@ class App:
             self.waiting()
         else:
             self.game()
-        self.text('RE7 / 21   —   NOIR EDITION', 33, 875, 11, MUTED)
+        self.text('RE7 / 21   —   THE BASEMENT', 33, 875, 11, MUTED)
         if self.demo:
             self.text(self.t('界面预览 · 非真实对局', 'UI PREVIEW · NOT A LIVE GAME'), 1015, 872, 14, GOLD)
         else:
@@ -781,6 +785,7 @@ class App:
             self.text(self.t('本次对局进度不会保留。', 'This game’s progress will not be saved.'), 456, 404, 18, MUTED)
             self.button((456, 482, 246, 54), self.t('继续对战', 'Keep playing'), 'continue', True)
             self.button((722, 482, 260, 54), self.t('返回大厅', 'Return to lobby'), 'menu')
+        self.canvas.blit(self.theme.scan, (0, 0))
 
     def present(self):
         size = self.window.get_size()
