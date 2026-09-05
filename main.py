@@ -5,6 +5,7 @@ import argparse
 import os
 from pathlib import Path
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -169,11 +170,12 @@ class App:
         font = self.font(size)
         line = ''
         y = rect.y
-        for char in text:
+        tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9’.,;:+/()-]*|[^\S\n]+|\n|.", text)
+        for char in tokens:
             if char == '\n' or font.size(line + char)[0] > rect.w:
                 self.text(line, rect.x, y, size, color)
                 y += size + 9
-                line = '' if char == '\n' else char
+                line = '' if char == '\n' else char.lstrip()
                 if y + size > rect.bottom:
                     return
             else:
@@ -326,7 +328,7 @@ class App:
         self.text(self.t('第一张牌仅你可见', 'Your first card is hidden from your opponent'), 237, 579, 14, MUTED)
         self.sidebar()
         self.text(self.t('你的王牌', 'YOUR TRUMPS'), 34, 655, 21, INK, True)
-        self.text(f'{len(trumps):02}', 183, 659, 16, GOLD)
+        self.text(f'{len(trumps):02}', 207, 659, 16, GOLD)
         self.text(self.t('选牌查看说明，再决定使用或弃置', 'Select a card to inspect, play or discard'), 241, 660, 16, MUTED)
         pages = max(1, (len(trumps)+5)//6)
         self.page = min(self.page, pages-1)
