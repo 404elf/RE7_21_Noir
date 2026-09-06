@@ -70,7 +70,7 @@ class Interface(unittest.TestCase):
             for page in range(4):
                 self.app.page = page
                 self.app.render()
-                self.assertEqual(len([action for _, action in self.app.buttons if isinstance(action, tuple)]), 6)
+                self.assertEqual(len([action for _, action in self.app.buttons if isinstance(action, tuple) and action[0] == 'select']), 6)
             self.app.book = True
             for page in range(4):
                 self.app.book_page = page

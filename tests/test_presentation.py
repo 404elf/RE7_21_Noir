@@ -65,3 +65,43 @@ class PresentationTests(unittest.TestCase):
             self.assertEqual(main.pg.image.tobytes(app.theme.accumulated_blood({}, 1), 'RGBA'), empty)
         finally:
             main.pg.quit()
+
+    def test_opponent_notices_deduplicate_ignore_own_and_reset_match(self):
+        app = main.App()
+        try:
+            m = Match()
+            app.observe_notices(m.gs)
+            m.record('trump', 2, card='Shield')
+            m.record('trump', 1, card='Add 1')
+            m.record('trump', 2, card='Perfect')
+            m.publish()
+            app.observe_notices(m.gs)
+            app.observe_notices(m.gs)
+            self.assertEqual(app.notice_queue, ['Shield', 'Perfect'])
+            m.gs.match_id = 'new'
+            app.observe_notices(m.gs)
+            self.assertEqual(app.notice_queue, [])
+        finally:
+            main.pg.quit()
+
+    def test_effect_pages_and_disabled_cards_remain_inspectable(self):
+        app = main.App()
+        try:
+            app.preview()
+            app.gs.active_trumps *= 4
+            app.render()
+            effects = [action for _, action in app.buttons if isinstance(action, tuple) and action[0] == 'effect']
+            self.assertEqual(len(effects), 6)
+            app.action('effect_next')
+            app.render()
+            self.assertEqual(app.effect_page, 1)
+            self.assertEqual(len([a for _, a in app.buttons if isinstance(a, tuple) and a[0] == 'effect']), 2)
+            app.action(('effect', 'Shield'))
+            app.render()
+            self.assertEqual(app.effect_selected, 'Shield')
+            app.book = True
+            app.book_page = 2
+            app.render()
+            self.assertEqual(len([a for _, a in app.buttons if isinstance(a, tuple) and a[0] == 'inspect']), 15)
+        finally:
+            main.pg.quit()

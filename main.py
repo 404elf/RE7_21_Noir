@@ -170,6 +170,12 @@ class App:
         self.selection_token = None
         self.page = 0
         self.book = False
+        self.effect_page = 0
+        self.effect_selected = None
+        self.review_result = False
+        self.notice = None
+        self.notice_queue = []
+        self.notice_cursor = None
         self.book_page = 0
         self.book_selected = None
         self.error = ''
@@ -281,8 +287,6 @@ class App:
             pg.draw.rect(self.canvas, (129, 66, 44), rect.inflate(-12, -12), 1)
             for dy in range(12, height-12, 10):
                 pg.draw.line(self.canvas, (79, 32, 24), (x+9, y+dy), (x+width-9, y+dy+6))
-            cx, cy = rect.center
-            pg.draw.polygon(self.canvas, GOLD, [(cx, cy-25), (cx+17, cy), (cx, cy+25), (cx-17, cy)], 1)
         else:
             self.text(value, x+10, y+6, 17, (70, 39, 25), True)
             surf = self.font(min(42, height//3), True).render(str(value), True, (49, 24, 17))
@@ -347,17 +351,35 @@ class App:
         self.button((420, 548, 600, 48), self.t('取消并返回', 'Cancel and return'), 'menu')
 
     def health(self, value, maximum, x, y, width=145):
-        self.panel((x, y, width, 5), (51, 27, 23), None, 2)
         ratio = max(0, min(1, value / max(1, maximum)))
-        if ratio:
-            pg.draw.rect(self.canvas, GREEN if ratio > .3 else RED, (x, y, max(1, int(width*ratio)), 5), border_radius=2)
+        pg.draw.rect(self.canvas, (43, 11, 12), (x, y, width, 11))
+        filled = int(width*ratio)
+        if filled:
+            pg.draw.rect(self.canvas, (158, 25, 31), (x, y, filled, 11))
+            pg.draw.line(self.canvas, (222, 65, 64), (x, y+1), (x+filled-1, y+1), 2)
+            for fraction, length in ((.18, 8), (.51, 13), (.82, 6)):
+                dx = x+int(filled*fraction)
+                pg.draw.line(self.canvas, (128, 16, 24), (dx, y+9), (dx, y+length+9), 2)
+                pg.draw.circle(self.canvas, (156, 24, 30), (dx, y+length+9), 3)
+
+    def player_status(self, pid, x, y):
+        gs = self.gs
+        hp = getattr(gs, f'p{pid}_fingers')
+        damaged = gs.phase in ('RESULT', 'GAMEOVER') and gs.round_winner == 3-pid and gs.round_damage > 0
+        if hp <= 0:
+            self.text('DEAD', x, y, 26, RED, True)
+        elif not damaged:
+            label = self.t('已停牌', 'STAYING') if getattr(gs, f'p{pid}_stop') else (self.t('王牌', 'TRUMPS')+f" · {len(getattr(gs, f'p{pid}_trumps'))}") if pid != self.pid else self.t('生命值', 'VITALITY')
+            self.text(label, x, y, 14, MUTED)
+        if damaged:
+            self.text(f'-{gs.round_damage}', x+94 if hp <= 0 else x, y-6, 34, RED, True, 90)
 
     def hand(self, hand, x, y, width, opponent=False):
         card_w = min(83, max(33, width // max(1, len(hand))-9))
         for index, value in enumerate(hand):
             self.number_card(value, x+index*(card_w+9), y, card_w, 107,
                              hidden=opponent and index == 0 and self.gs.phase == 'ACTION',
-                             secret=not opponent and index == 0)
+                             secret=not opponent and index == 0 and self.gs.phase == 'ACTION')
 
     def can_act(self):
         return bool(self.gs and self.gs.phase == 'ACTION' and self.gs.turn == self.pid and time.monotonic() >= self.cooldown and not self.demo)
@@ -396,25 +418,15 @@ class App:
         self.text(opp_total, 838, 184, 28, GOLD, True, 142)
         self.text(self.t('明牌点数', 'VISIBLE TOTAL') if gs.phase == 'ACTION' else self.t('总点数', 'TOTAL'), 838, 230, 13, MUTED)
         self.hand(theirs, 236, 176, 580, True)
-        self.text(self.t('已停牌', 'STAYING') if getattr(gs, f'p{3-self.pid}_stop') else self.t('王牌', 'TRUMPS')+f' · {len(getattr(gs, f"p{3-self.pid}_trumps"))}', 60, 274, 15, MUTED)
+        self.player_status(3-self.pid, 60, 280)
         pg.draw.line(self.canvas, (82, 56, 38), (60, 322), (982, 322))
-        self.text(self.t('场上效果', 'TABLE EFFECTS'), 60, 339, 14, MUTED)
-        active = gs.active_trumps
-        table_page = int(time.monotonic()/5) % max(1, (len(active)+5)//6)
-        for i, card in enumerate(active[table_page*6:table_page*6+6]):
-            x = 227 + (i%3)*249
-            y = 331 + (i//3)*36
-            name = info(card['name'])[0] if self.zh else card['name']
-            owner = self.t('我', 'YOU') if card['owner'] == self.pid else self.t('敌', 'OPP')
-            self.panel((x, y, 240, 31), (41, 31, 23), LINE)
-            self.text(f'{owner} · {name}', x+9, y+4, 17, GOLD if card['owner'] == self.pid else RED, True, width=222)
-        if not active:
-            self.text(self.t('暂无持续效果', 'No active effects'), 236, 339, 16, MUTED)
+        if gs.phase == 'ACTION':
+            self.table_effects()
         pg.draw.line(self.canvas, (82, 56, 38), (60, 411), (982, 411))
         self.text(self.t('你', 'YOU'), 60, 439, 20, INK, True)
         self.text(f'{max(0, my_hp)} / {gs.max_hp_limit}', 60, 477, 18, MUTED)
         self.health(my_hp, gs.max_hp_limit, 60, 513)
-        self.text(self.t('已停牌', 'STAYING') if getattr(gs, f'p{self.pid}_stop') else self.t('生命值', 'VITALITY'), 60, 540, 15, MUTED)
+        self.player_status(self.pid, 60, 548)
         self.hand(mine, 236, 447, 580)
         total = sum(mine)
         self.text(f'{total}', 838, 455, 40, RED if total > gs.target_score else GOLD, True)
@@ -434,8 +446,10 @@ class App:
             for pid, y in ((3-self.pid, 270), (self.pid, 555)):
                 seconds = max(0, remaining.get(pid, 0)-(elapsed if active == pid else 0))
                 color = RED if seconds < 10 else INK if active == pid else MUTED
-                self.panel((818, y-4, 176, 46), (42, 26, 19) if active == pid else PANEL, GOLD if active == pid else LINE)
-                self.text(f'{int(seconds)//60:02}:{int(seconds)%60:02}', 836, y, 32, color, True)
+                self.text(f'{int(seconds)//60:02}:{int(seconds)%60:02}', 838, y-3, 30, color)
+                pg.draw.line(self.canvas, (91, 34, 28) if active == pid else LINE, (840, y+36), (973, y+36), 2)
+                if active == pid:
+                    pg.draw.circle(self.canvas, RED, (986, y+15), 3)
         if getattr(gs, 'draw_offer', 0) == 3-self.pid:
             self.button((460, 96, 325, 43), self.t('对手申请平局 · 查看', 'Draw offered · respond'), 'match_options', True)
         self.sidebar()
@@ -456,7 +470,44 @@ class App:
         if gs.phase in ('RESULT', 'GAMEOVER'):
             self.result()
 
-    def trump(self, name, rect, selected, action, floating=False):
+    def table_effects(self):
+        cards = self.gs.active_trumps
+        pages = max(1, (len(cards)+5)//6)
+        self.effect_page = min(self.effect_page, pages-1)
+        self.text(self.t('场上王牌', 'IN PLAY'), 60, 333, 16, GOLD, True)
+        self.button((60, 370, 39, 29), '‹', 'effect_prev', enabled=self.effect_page > 0)
+        self.text(f'{self.effect_page+1}/{pages}', 108, 375, 12, MUTED)
+        self.button((153, 370, 39, 29), '›', 'effect_next', enabled=self.effect_page+1 < pages)
+        for i, card in enumerate(cards[self.effect_page*6:self.effect_page*6+6]):
+            rect = pg.Rect(223+i*127, 330, 117, 72)
+            mine = card['owner'] == self.pid
+            self.panel(rect, (48, 33, 24) if mine else (49, 22, 21), (113, 82, 51) if mine else (121, 43, 35))
+            name = info(card['name'])[0] if self.zh else card['name']
+            self.text(self.t('你的', 'YOURS') if mine else self.t('对手', 'OPPONENT'), rect.x+9, rect.y+7, 11, GOLD if mine else RED)
+            self.text(name, rect.x+9, rect.y+29, 16, INK, True, 100)
+            self.text(self.t('查看效果', 'Inspect'), rect.x+9, rect.y+54, 10, MUTED)
+            self.buttons.append((rect, ('effect', card['name'])))
+        if not cards:
+            self.text(self.t('牌桌上暂无王牌', 'No trumps in play'), 237, 354, 18, MUTED)
+
+    def observe_notices(self, state):
+        entries = getattr(state, 'action_log', [])
+        match_id = getattr(state, 'match_id', None)
+        cursor = self.notice_cursor
+        if cursor and cursor[0] == match_id:
+            if len(cursor) > 2 and cursor[2] != state.round_id:
+                self.notice_queue = []
+                self.notice = None
+            for entry in entries:
+                if entry['id'] > cursor[1] and entry['round'] == state.round_id and entry['event'] == 'trump' and entry['pid'] == 3-self.pid:
+                    self.notice_queue.append(entry['card'])
+            self.notice_queue = self.notice_queue[-12:]
+        elif cursor:
+            self.notice_queue = []
+            self.notice = None
+        self.notice_cursor = (match_id, max((entry['id'] for entry in entries), default=0), state.round_id)
+
+    def trump(self, name, rect, selected, action, floating=False, disabled=False):
         zh, category, _, _ = info(name)
         cat_zh, cat_en, color, symbol = CATEGORIES[category]
         hover = rect.collidepoint(self.mouse)
@@ -468,6 +519,12 @@ class App:
         self.text(name if self.zh else zh, rect.x+14, rect.y+87, 12, MUTED, width=rect.w-25)
         if selected and not floating:
             self.text(self.t('已选择', 'SELECTED'), rect.x+14, rect.bottom-24, 11, GOLD)
+        if disabled:
+            patch = self.canvas.subsurface(rect).copy()
+            patch = pg.transform.grayscale(patch)
+            patch.fill((120, 120, 120), special_flags=pg.BLEND_RGB_MULT)
+            self.canvas.blit(patch, rect)
+            self.text(self.t('未启用', 'DISABLED'), rect.x+14, rect.bottom-23, 12, (175, 175, 175), True)
         if action is not None:
             self.buttons.append((rect, action))
 
@@ -493,7 +550,20 @@ class App:
         if getattr(gs, 'last_result', None) and self.selected is not None:
             self.button((1220, 502, 170, 35), self.t('回看上一局', 'Last round'), 'last_result')
         trumps = getattr(gs, f'p{self.pid}_trumps')
-        if self.selected is not None and self.selected < len(trumps):
+        if self.notice and gs.phase == 'ACTION':
+            name = self.notice[0]
+            zh, cat, desc, en = info(name)
+            self.text(self.t('对手打出了王牌', 'OPPONENT PLAYED'), 1056, 513, 18, RED, True)
+            self.text(zh if self.zh else name, 1056, 556, 30, INK, True, 326)
+            self.wrap(desc if self.zh else en, pg.Rect(1056, 620, 326, 132), 19, INK)
+            self.button((1056, 780, 326, 44), self.t('知道了', 'Continue'), 'dismiss_notice')
+        elif self.effect_selected:
+            zh, cat, desc, en = info(self.effect_selected)
+            self.text(self.t('场上王牌', 'IN PLAY'), 1056, 513, 16, GOLD)
+            self.text(zh if self.zh else self.effect_selected, 1056, 554, 27, INK, True, 326)
+            self.wrap(desc if self.zh else en, pg.Rect(1056, 620, 326, 132), 19)
+            self.button((1056, 780, 326, 44), self.t('关闭详情', 'Close details'), 'close_effect')
+        elif self.selected is not None and self.selected < len(trumps):
             name = trumps[self.selected][0]
             zh, cat, desc, en = info(name)
             color = CATEGORIES[cat][2]
@@ -503,12 +573,13 @@ class App:
             self.wrap(desc if self.zh else en, pg.Rect(1060, 628, 320, 126), 18)
             self.button((1054, 779, 161, 47), self.t('使用王牌', 'Play trump'), 'play', True, allowed and self.trump_allowed(trumps[self.selected]))
             self.button((1227, 779, 161, 47), self.t('弃置', 'Discard'), 'discard', enabled=allowed, danger=True)
-        elif getattr(gs, 'last_result', None):
+        elif self.review_result and getattr(gs, 'last_result', None):
             self.result_summary(gs.last_result)
         else:
-            self.text('◇', 1189, 556, 51, GOLD)
-            self.text(self.t('下一步，由你决定', 'Your next move'), 1060, 652, 25, INK, True)
-            self.wrap(self.t('向牌桌拖动王牌即可打出；水平向右拖动即可弃置。点击仍可查看说明。', 'Drag a trump onto the table to play; drag horizontally right to discard. Click to inspect.'), pg.Rect(1060, 704, 318, 95), 18)
+            if getattr(gs, 'last_result', None):
+                self.button((1056, 780, 326, 44), self.t('回看上一局', 'Review last round'), 'last_result')
+            self.text(self.t('下一步，由你决定', 'Your next move'), 1060, 552, 25, INK, True)
+            self.wrap(self.t('向牌桌拖动王牌即可打出；水平向右拖动即可弃置。点击仍可查看说明。', 'Drag a trump onto the table to play; drag horizontally right to discard. Click to inspect.'), pg.Rect(1060, 614, 318, 125), 18)
 
     def result_explanation(self, data):
         a, b = [sum(hand) for hand in data['hands']]
@@ -543,21 +614,30 @@ class App:
         gs = self.gs
         self.buttons = [b for b in self.buttons if b[1] in ('book', 'language', 'audio_toggle', 'history', 'match_options')]
         self.panel((1034, 326, 374, 520))
+        title = 'DRAW' if not gs.round_winner else 'YOU WIN' if gs.round_winner == self.pid else 'YOU LOSE'
+        color = GOLD if gs.round_winner == self.pid else RED if gs.round_winner else INK
+        stamp = self.font(68, True).render(title, True, color)
+        self.canvas.blit(stamp, stamp.get_rect(center=(522, 366)))
         reason = getattr(gs, 'end_reason', '')
-        if reason in ('surrender', 'agreement', 'timeout'):
-            label = {'surrender': ('投降结束', 'SURRENDER'), 'agreement': ('双方同意平局', 'DRAW AGREED'), 'timeout': ('总时间耗尽', 'TIME FORFEIT')}[reason]
-            self.text(self.t(*label), 1056, 356, 27, GOLD, True, 326)
-            winner = gs.round_winner
-            self.text(self.t('平局', 'DRAW') if not winner else self.t('你获胜', 'YOU WON') if winner == self.pid else self.t('你落败', 'YOU LOST'), 1056, 420, 32, INK, True)
-        else:
-            self.result_summary(self.result_data(), 354)
+        if reason:
+            label = {'surrender': ('投降结束', 'SURRENDER'), 'agreement': ('双方同意平局', 'DRAW AGREED'), 'timeout': ('总时间耗尽', 'TIME FORFEIT')}.get(reason, ('', ''))
+            self.text(self.t(*label), 1056, 362, 24, GOLD, True, 326)
+        elif gs.round_damage:
+            self.text(self.t('本局扣血', 'ROUND DAMAGE'), 1056, 355, 17, MUTED)
+            self.text(f'-{gs.round_damage}', 1056, 387, 72, RED, True)
+            loser = 3-gs.round_winner
+            self.text(self.t('你受伤', 'YOU TOOK DAMAGE') if loser == self.pid else self.t('对手受伤', 'OPPONENT TOOK DAMAGE'), 1056, 486, 18, INK)
+            if getattr(gs, f'p{loser}_fingers') <= 0:
+                self.text(self.t('生命耗尽', 'NO LIFE REMAINING'), 1056, 530, 27, RED, True)
         if gs.phase == 'GAMEOVER':
             self.button((1054, 696, 334, 54), self.t('等待对方同意', 'Waiting for opponent') if self.rematch else self.t('再来一局', 'Play again'), 'rematch', True, not self.rematch and not self.demo)
             self.button((1054, 770, 334, 54), self.t('返回大厅', 'Return to lobby'), 'menu')
         else:
             seconds = max(0, int(gs.result_timer-time.time())+1)
-            self.text(self.t(f'{seconds} 秒后下一局', f'Next round in {seconds}s'), 1056, 725, 19, MUTED)
-            self.wrap(self.t('下一局仍可在右侧回看本局。', 'Review this round in the sidebar after play resumes.'), pg.Rect(1056, 768, 320, 60), 16)
+            ended = gs.p1_fingers <= 0 or gs.p2_fingers <= 0 or gs.is_escape_end
+            label = self.t(f'{seconds} 秒后结束对局', f'Match ends in {seconds}s') if ended else self.t(f'{seconds} 秒后下一局', f'Next round in {seconds}s')
+            self.text(label, 1056, 725, 19, MUTED)
+            self.text(self.t('双方亮牌', 'HANDS REVEALED'), 1056, 773, 16, MUTED)
 
     def catalog(self):
         self.buttons = []
@@ -574,7 +654,7 @@ class App:
         names = sorted(CARDS, key=lambda name: not enabled.get(name, False))
         pages = (len(names)+14)//15
         for i, name in enumerate(names[self.book_page*15:self.book_page*15+15]):
-            self.trump(name, pg.Rect(136+(i%5)*164, 190+(i//5)*158, 151, 140), self.book_selected == name, ('inspect', name))
+            self.trump(name, pg.Rect(136+(i%5)*164, 190+(i//5)*158, 151, 140), self.book_selected == name, ('inspect', name), disabled=not enabled.get(name, False))
         self.panel((976, 190, 328, 457), BG)
         name = self.book_selected
         if name:
@@ -605,6 +685,7 @@ class App:
                 self.scene = 'waiting'
                 sound_events.append('connected')
             elif event == 'state':
+                self.observe_notices(value)
                 self.history.ingest(value)
                 sound_events.extend(self.sound_tracker.update(value, self.pid))
                 latest = value
@@ -618,6 +699,11 @@ class App:
                 self.sound_tracker.reset()
                 sound_events = ['error']
         if latest:
+            if self.gs and latest.round_id != self.gs.round_id:
+                self.effect_page = 0
+                self.effect_selected = None
+            if self.effect_selected and not any(card['name'] == self.effect_selected for card in latest.active_trumps):
+                self.effect_selected = None
             self.state_received_at = time.monotonic()
             token = (latest.round_id, tuple(getattr(latest, f'p{self.pid}_trumps')))
             if token != self.selection_token or latest.phase != 'ACTION' or latest.turn != self.pid:
@@ -651,7 +737,18 @@ class App:
             self.overlay = None
             return
         if action == 'last_result':
+            self.review_result = True
+            self.effect_selected = None
             self.selected = None
+            return
+        if action in ('effect_prev', 'effect_next'):
+            self.effect_page = max(0, self.effect_page+(-1 if action == 'effect_prev' else 1))
+            return
+        if action == 'dismiss_notice':
+            self.notice = None
+            return
+        if action == 'close_effect':
+            self.effect_selected = None
             return
         if action == 'close_overlay':
             self.overlay = None
@@ -680,7 +777,12 @@ class App:
         self.sound.play('card_select' if isinstance(action, tuple) and action[0] in ('select', 'inspect') else 'ui_click')
         if isinstance(action, tuple):
             kind, value = action
-            if kind == 'select':
+            if kind == 'effect':
+                self.effect_selected = value
+                self.review_result = False
+            elif kind == 'select':
+                self.effect_selected = None
+                self.review_result = False
                 self.selected = value
             elif kind == 'inspect':
                 self.book_selected = value
@@ -714,6 +816,12 @@ class App:
             self.sound_tracker.reset()
             self.error = ''
             self.gs = None
+            self.notice_cursor = None
+            self.notice_queue = []
+            self.notice = None
+            self.effect_selected = None
+            self.effect_page = 0
+            self.review_result = False
             self.selected = None
             self.page = 0
             self.focus = False
@@ -832,6 +940,10 @@ class App:
 
     def render(self):
         self.updater.poll()
+        if self.notice and time.monotonic() >= self.notice[1]:
+            self.notice = None
+        if not self.notice and self.notice_queue:
+            self.notice = (self.notice_queue.pop(0), time.monotonic()+4)
         self.buttons = []
         self.canvas.blit(self.theme.background, (0, 0))
         self.header()

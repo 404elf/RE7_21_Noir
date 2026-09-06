@@ -46,7 +46,7 @@ class HorrorTheme:
 
     def accumulated_blood(self, losses, pid):
         # Cached transparent layer drawn below cards/text, with deterministic positions.
-        key = (min(400, int(losses.get(pid, 0))), min(400, int(losses.get(3-pid, 0))))
+        key = (min(400, int(losses.get(pid, 0))*3), min(400, int(losses.get(3-pid, 0))*3))
         if self.blood_key != key:
             self.blood_key = key
             self.table_blood.fill((0, 0, 0, 0))
