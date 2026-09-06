@@ -1,5 +1,5 @@
 {
-  "_comment": "填写新仓库的 owner/repo。仅支持公开 GitHub Releases；不要填写访问令牌。仓库尚未创建，因此默认留空。",
-  "repository": "",
+  "_comment": "从公开 GitHub Releases 手动检查更新，无需填写令牌。",
+  "repository": "404elf/RE7_21_Noir",
   "asset_name": "RE7_21_Noir-Windows.zip"
 }
