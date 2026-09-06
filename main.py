@@ -406,7 +406,8 @@ class App:
             y = 331 + (i//3)*36
             name = info(card['name'])[0] if self.zh else card['name']
             owner = self.t('我', 'YOU') if card['owner'] == self.pid else self.t('敌', 'OPP')
-            self.text(f'{owner} · {name}', x, y, 15, GREEN if card['owner'] == self.pid else RED, width=240)
+            self.panel((x, y, 240, 31), (41, 31, 23), LINE)
+            self.text(f'{owner} · {name}', x+9, y+4, 17, GOLD if card['owner'] == self.pid else RED, True, width=222)
         if not active:
             self.text(self.t('暂无持续效果', 'No active effects'), 236, 339, 16, MUTED)
         pg.draw.line(self.canvas, (82, 56, 38), (60, 411), (982, 411))
@@ -418,7 +419,14 @@ class App:
         total = sum(mine)
         self.text(f'{total}', 838, 455, 40, RED if total > gs.target_score else GOLD, True)
         self.text(self.t('爆牌', 'BUST') if total > gs.target_score else self.t('当前点数', 'YOUR TOTAL'), 838, 513, 15, RED if total > gs.target_score else MUTED)
-        self.text(self.t('第一张牌仅你可见', 'Your first card is hidden from your opponent'), 237, 579, 14, MUTED)
+        hidden_note = self.t('第一张牌仅你可见', 'Your first card is hidden from your opponent') if gs.phase == 'ACTION' else self.t('双方已亮牌，可直接核对点数', 'Both hands revealed — compare the totals')
+        self.text(hidden_note, 237, 575, 14, MUTED)
+        recent = next((entry for entry in reversed(getattr(gs, 'action_log', [])) if entry['round'] == gs.round_id and entry['event'] in ('trump', 'discard', 'hit', 'stay', 'timeout')), None)
+        if recent:
+            message = describe(recent, self.zh)
+            for player in (1, 2):
+                message = message.replace(f'玩家 {player}' if self.zh else f'Player {player}', self.t('你', 'You') if player == self.pid else self.t('对手', 'Opponent'))
+            self.text(self.t('最近：', 'Latest: ')+message, 237, 600, 16, GOLD, width=558)
         remaining = getattr(gs, 'clock_remaining', {})
         active = getattr(gs, 'clock_active', 0)
         if getattr(gs, 'clock_config', {}).get('enabled'):

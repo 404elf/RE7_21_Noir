@@ -50,11 +50,13 @@ class HorrorTheme:
         if self.blood_key != key:
             self.blood_key = key
             self.table_blood.fill((0, 0, 0, 0))
+            self.table_blood.set_clip((194, 0, 585, 479))
             for side, amount in enumerate(key):
                 rng = random.Random(72133+side)
                 for point in range(amount):
-                    center = (rng.randint(15, 960), rng.randint(280, 475) if side == 0 else rng.randint(10, 165))
+                    center = (rng.randint(265, 705), rng.randint(280, 475) if side == 0 else rng.randint(10, 165))
                     self.blood(self.table_blood, center, rng.randint(24, 58), side*1000+point)
+            self.table_blood.set_clip(None)
         return self.table_blood
 
     def panel(self, size, fill, border):

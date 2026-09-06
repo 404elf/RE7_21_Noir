@@ -57,6 +57,9 @@ class PresentationTests(unittest.TestCase):
             empty = main.pg.image.tobytes(app.theme.accumulated_blood({}, 1), 'RGBA')
             layer = app.theme.accumulated_blood({1: 3, 2: 2}, 1)
             self.assertNotEqual(main.pg.image.tobytes(layer, 'RGBA'), empty)
+            for x in (30, 150, 810, 950):
+                for y in (60, 100, 330, 400):
+                    self.assertEqual(layer.get_at((x, y)).a, 0)
             self.assertIs(layer, app.theme.accumulated_blood({1: 3, 2: 2}, 1))
             self.assertEqual(random.getstate(), rng)
             self.assertEqual(main.pg.image.tobytes(app.theme.accumulated_blood({}, 1), 'RGBA'), empty)
