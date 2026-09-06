@@ -94,7 +94,7 @@ class SoundManager:
             return False
         category, _ = EVENTS[event]
         # Separate lanes keep menu ticks from interrupting a result melody.
-        lane = {'ui': 0, 'game': 1, 'result': 2}[category]
+        lane = 3 if event == 'damage' else {'ui': 0, 'game': 1, 'result': 2}[category]
         try:
             pygame.mixer.Channel(lane).play(self.sounds[event])
             self.last_played[event] = now
@@ -110,7 +110,7 @@ class SoundManager:
         primary = max(unique, key=lambda event: (EVENTS[event][1], event))
         self.play(primary)
         # A short impact may accompany a result, but avoid a cascade of stale cues.
-        if 'damage' in unique and EVENTS[primary][0] == 'result':
+        if 'damage' in unique and primary != 'damage':
             self.play('damage')
 
 
@@ -139,27 +139,30 @@ class SoundTracker:
             'trumps': tuple(getattr(state, f'p{pid}_trumps')),
             'other_count': len(getattr(state, f'p{other}_trumps')),
             'hp': getattr(state, f'p{pid}_fingers'),
+            'health': (state.p1_fingers, state.p2_fingers),
+            'match': getattr(state, 'match_id', None),
             'stops': (state.p1_stop, state.p2_stop),
             'bust': sum(getattr(state, f'p{pid}_hand')) > state.target_score,
         }
         previous, self.previous = self.previous, snapshot
         if previous == snapshot:
             return []
+        damaged = bool(previous and previous['match'] == snapshot['match'] and getattr(state, 'end_reason', '') != 'timeout' and any(now < old for now, old in zip(snapshot['health'], previous['health'])))
         if snapshot['phase'] == 'GAMEOVER':
             self.pending = None
             if previous and previous['phase'] == 'GAMEOVER':
                 return []
             result = 'draw' if state.round_winner == 0 else 'win' if state.round_winner == pid else 'loss'
-            return ['game_'+result]
+            return (['damage'] if damaged else [])+['game_'+result]
         if snapshot['phase'] == 'RESULT':
             self.pending = None
             if previous and previous['round'] == snapshot['round'] and previous['phase'] == 'RESULT':
                 return []
             result = 'draw' if state.round_winner == 0 else 'win' if state.round_winner == pid else 'loss'
-            return (['damage'] if previous and snapshot['hp'] < previous['hp'] else [])+['round_'+result]
+            return (['damage'] if damaged else [])+['round_'+result]
         if previous is None or previous['round'] != snapshot['round'] or previous['phase'] != 'ACTION':
             self.pending = None
-            return ['round_start']
+            return (['damage'] if damaged else [])+['round_start']
         events = []
         acknowledged = None
         if self.pending:
@@ -179,7 +182,7 @@ class SoundTracker:
             events.append('stay')
         if not previous['bust'] and snapshot['bust']:
             events.append('bust')
-        if snapshot['hp'] < previous['hp']:
+        if damaged:
             events.append('damage')
         if previous['turn'] != pid and snapshot['turn'] == pid:
             events.append('your_turn')

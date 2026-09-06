@@ -5,8 +5,10 @@ from pathlib import Path
 import time
 import uuid
 import re7_21 as engine
+from cards import CARDS
+from presentation_rules import enabled_cards
 
-DEFAULT_TIMER = dict(enabled=False, mode='turn', turn_seconds=30., round_seconds=120., initial_minutes=3., increment_seconds=3., settlement_seconds=1.)
+DEFAULT_TIMER = dict(enabled=False, mode='turn', turn_seconds=30., round_seconds=120., initial_minutes=3., increment_seconds=3., settlement_seconds=3.)
 
 
 def timer_config(value):
@@ -34,9 +36,13 @@ class Match:
         self.monotonic, self.wall = monotonic, wall
         self.timer = timer_config(timer)
         self.gs = engine.GameState()
+        self.gs.last_result = None
         self.gs.end_reason = ''
         self.gs.draw_offer = 0
         self.draw_offered_round = {}
+        self.blood_loss = {1: 0, 2: 0}
+        self.last_hp = {1: self.gs.p1_fingers, 2: self.gs.p2_fingers}
+        self.enabled_cards = enabled_cards(CARDS, engine.WEIGHTS, engine.SETTINGS)
         self.last = monotonic()
         self.log = []
         self.sequence = 0
@@ -56,6 +62,13 @@ class Match:
         self.remaining = {1: float(amount), 2: float(amount)}
 
     def publish(self):
+        for pid in (1, 2):
+            hp = max(0, getattr(self.gs, f'p{pid}_fingers'))
+            if self.gs.end_reason != 'timeout':
+                self.blood_loss[pid] += max(0, self.last_hp[pid]-hp)
+            self.last_hp[pid] = hp
+        self.gs.blood_loss = self.blood_loss.copy()
+        self.gs.enabled_cards = self.enabled_cards
         self.gs.clock_config = self.timer.copy()
         self.gs.clock_remaining = self.remaining.copy()
         self.gs.clock_active = self.gs.turn if self.timer['enabled'] and self.gs.phase == 'ACTION' else 0
@@ -66,6 +79,7 @@ class Match:
         self.gs.resolve_round()
         self.gs.result_timer = self.wall()+self.timer['settlement_seconds']
         self.gs.draw_offer = 0
+        self.gs.last_result = dict(round=self.gs.round_id, hands=[list(self.gs.p1_hand), list(self.gs.p2_hand)], target=self.gs.target_score, winner=self.gs.round_winner, damage=self.gs.round_damage, escape=self.gs.is_escape_end)
         self.record('result', winner=self.gs.round_winner, damage=self.gs.round_damage,
                     totals=[sum(self.gs.p1_hand), sum(self.gs.p2_hand)])
 
@@ -138,7 +152,10 @@ class Match:
                 self.record('rematch', pid)
             if gs.p1_req_rematch and gs.p2_req_rematch:
                 gs.full_reset()
+                self.blood_loss = {1: 0, 2: 0}
+                self.last_hp = {1: gs.p1_fingers, 2: gs.p2_fingers}
                 gs.end_reason = ''
+                gs.last_result = None
                 gs.draw_offer = 0
                 self.draw_offered_round = {}
                 self.log = []

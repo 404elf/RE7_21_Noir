@@ -25,6 +25,7 @@ from session_server import server_worker
 from updater import Updater
 from history import History, describe
 from horror_theme import HorrorTheme
+from presentation_rules import enabled_cards
 
 ROOT = Path(__file__).resolve().parent
 W, H = 1440, 900
@@ -387,6 +388,7 @@ class App:
             turn = self.t('本局结算', 'ROUND RESULT')
         self.text(turn, 824, 110, 18, GOLD)
         self.panel((32, 151, 978, 479), (33, 27, 21), (93, 66, 43), 24)
+        self.canvas.blit(self.theme.accumulated_blood(getattr(gs, 'blood_loss', {}), self.pid), (32, 151))
         self.text(self.t('AI 对手', 'AI OPPONENT') if self.solo else self.t('对手', 'OPPONENT'), 60, 175, 20, INK, True)
         self.text(f'{max(0, opp_hp)} / {gs.max_hp_limit}', 60, 211, 18, MUTED)
         self.health(opp_hp, gs.max_hp_limit, 60, 245)
@@ -439,13 +441,14 @@ class App:
         self.button((937, 649, 48, 37), '›', 'next', enabled=self.page+1 < pages)
         for i, card in enumerate(trumps[self.page*6:self.page*6+6]):
             idx = self.page*6+i
-            self.trump(card[0], pg.Rect(32+i*165, 706, 153, 140), self.selected == idx, ('select', idx))
+            if not (self.drag and self.drag['index'] == idx and self.drag_moved()):
+                self.trump(card[0], pg.Rect(32+i*165, 706, 153, 140), self.selected == idx, ('select', idx))
         if not trumps:
             self.text(self.t('手中暂无王牌。抽牌或新回合可能带来转机。', 'No trumps in hand. A draw or a new round may change that.'), 48, 757, 18, MUTED)
         if gs.phase in ('RESULT', 'GAMEOVER'):
             self.result()
 
-    def trump(self, name, rect, selected, action):
+    def trump(self, name, rect, selected, action, floating=False):
         zh, category, _, _ = info(name)
         cat_zh, cat_en, color, symbol = CATEGORIES[category]
         hover = rect.collidepoint(self.mouse)
@@ -455,9 +458,10 @@ class App:
         self.text(symbol, rect.right-38, rect.y+7, 24, color)
         self.text(zh if self.zh else name, rect.x+14, rect.y+54, 18, INK, True, rect.w-25)
         self.text(name if self.zh else zh, rect.x+14, rect.y+87, 12, MUTED, width=rect.w-25)
-        if selected:
+        if selected and not floating:
             self.text(self.t('已选择', 'SELECTED'), rect.x+14, rect.bottom-24, 11, GOLD)
-        self.buttons.append((rect, action))
+        if action is not None:
+            self.buttons.append((rect, action))
 
     def sidebar(self):
         gs = self.gs
@@ -478,6 +482,8 @@ class App:
         message = self.t('抽牌已被封锁', 'Drawing is locked') if locked else self.t('双方停牌后结算 · 王牌不结束行动', 'Both stay to settle · Trumps keep your turn')
         self.wrap(message, pg.Rect(1057, 420, 320, 45), 14)
         self.panel((1034, 491, 374, 355))
+        if getattr(gs, 'last_result', None) and self.selected is not None:
+            self.button((1220, 502, 170, 35), self.t('回看上一局', 'Last round'), 'last_result')
         trumps = getattr(gs, f'p{self.pid}_trumps')
         if self.selected is not None and self.selected < len(trumps):
             name = trumps[self.selected][0]
@@ -489,32 +495,61 @@ class App:
             self.wrap(desc if self.zh else en, pg.Rect(1060, 628, 320, 126), 18)
             self.button((1054, 779, 161, 47), self.t('使用王牌', 'Play trump'), 'play', True, allowed and self.trump_allowed(trumps[self.selected]))
             self.button((1227, 779, 161, 47), self.t('弃置', 'Discard'), 'discard', enabled=allowed, danger=True)
+        elif getattr(gs, 'last_result', None):
+            self.result_summary(gs.last_result)
         else:
             self.text('◇', 1189, 556, 51, GOLD)
             self.text(self.t('下一步，由你决定', 'Your next move'), 1060, 652, 25, INK, True)
             self.wrap(self.t('向牌桌拖动王牌即可打出；水平向右拖动即可弃置。点击仍可查看说明。', 'Drag a trump onto the table to play; drag horizontally right to discard. Click to inspect.'), pg.Rect(1060, 704, 318, 95), 18)
 
+    def result_explanation(self, data):
+        a, b = [sum(hand) for hand in data['hands']]
+        target = data['target']
+        if data.get('escape'):
+            return self.t('逃脱效果触发，本场以平局结束。', 'Escape ends the match in a draw.')
+        if a == b:
+            return self.t('双方点数相同，平局。', 'Equal totals: a draw.')
+        if a > target and b > target:
+            return self.t('双方均爆牌，点数较小的一方获胜。', 'Both busted; the lower total wins.')
+        if a > target or b > target:
+            who = self.t('你', 'You') if (1 if a > target else 2) == self.pid else self.t('对手', 'Opponent')
+            return self.t(f'{who}超过目标 {target}，爆牌落败。', f'{who} exceeded {target} and lost by busting.')
+        return self.t('双方均未爆牌，更接近目标的一方获胜。', 'Neither busted; the total closer to the target wins.')
+
+    def result_data(self):
+        gs = self.gs
+        return dict(round=gs.round_id, hands=[gs.p1_hand, gs.p2_hand], target=gs.target_score, winner=gs.round_winner, damage=gs.round_damage, escape=gs.is_escape_end)
+
+    def result_summary(self, data, y=510):
+        winner = data['winner']
+        title = self.t('平局', 'DRAW') if not winner else self.t('你获胜', 'YOU WON') if winner == self.pid else self.t('你落败', 'YOU LOST')
+        self.text(self.t(f"第 {data['round']} 局 · ", f"ROUND {data['round']} · ")+title, 1056, y, 25, GOLD, True, 326)
+        for i, pid in enumerate((self.pid, 3-self.pid)):
+            hand = data['hands'][pid-1]
+            label = self.t('你', 'YOU') if pid == self.pid else self.t('对手', 'OPP')
+            self.text(label+'  '+' + '.join(map(str, hand))+' = '+str(sum(hand)), 1056, y+50+i*36, 18, INK, width=326)
+        self.wrap(self.result_explanation(data), pg.Rect(1056, y+136, 326, 90), 18, INK)
+        self.text(self.t(f"目标 {data['target']} · 本局伤害 {data['damage']}", f"Target {data['target']} · Damage {data['damage']}"), 1056, y+228, 16, MUTED, width=326)
+
     def result(self):
         gs = self.gs
-        self.buttons = [b for b in self.buttons if b[1] in ('book', 'language', 'audio_toggle', 'history')]
-        overlay = pg.Surface((W, H), pg.SRCALPHA)
-        overlay.fill((5, 10, 10, 185))
-        self.canvas.blit(overlay, (0, 89))
-        self.panel((412, 247, 616, 394), (35, 24, 20), RED, 22)
-        title = self.t('平 局', 'DRAW') if gs.round_winner == 0 else self.t('本局获胜', 'ROUND WON') if gs.round_winner == self.pid else self.t('本局落败', 'ROUND LOST')
-        self.text(self.t('总时间耗尽 · 判负', 'TIME FORFEIT') if getattr(gs, 'end_reason', '') == 'timeout' else self.t('牌 局 结 算', 'THE TABLE HAS SPOKEN'), 455, 278, 16, GOLD)
+        self.buttons = [b for b in self.buttons if b[1] in ('book', 'language', 'audio_toggle', 'history', 'match_options')]
+        self.panel((1034, 326, 374, 520))
         reason = getattr(gs, 'end_reason', '')
-        if reason in ('surrender', 'agreement'):
-            self.text(self.t('投降结束' if reason == 'surrender' else '双方同意平局', 'SURRENDER' if reason == 'surrender' else 'DRAW AGREED'), 700, 278, 16, GOLD)
-        self.text(title, 455, 322, 48, INK, True)
-        self.text(f'{sum(gs.p1_hand)}  /  {sum(gs.p2_hand)}', 455, 398, 27, MUTED)
-        self.text(self.t(f'玩家 1 / 玩家 2 · 本局伤害 {gs.round_damage}', f'Player 1 / Player 2 · Damage {gs.round_damage}'), 455, 447, 17, MUTED)
+        if reason in ('surrender', 'agreement', 'timeout'):
+            label = {'surrender': ('投降结束', 'SURRENDER'), 'agreement': ('双方同意平局', 'DRAW AGREED'), 'timeout': ('总时间耗尽', 'TIME FORFEIT')}[reason]
+            self.text(self.t(*label), 1056, 356, 27, GOLD, True, 326)
+            winner = gs.round_winner
+            self.text(self.t('平局', 'DRAW') if not winner else self.t('你获胜', 'YOU WON') if winner == self.pid else self.t('你落败', 'YOU LOST'), 1056, 420, 32, INK, True)
+        else:
+            self.result_summary(self.result_data(), 354)
         if gs.phase == 'GAMEOVER':
-            self.button((454, 539, 256, 54), self.t('等待对方同意', 'Waiting for opponent') if self.rematch else self.t('再来一局', 'Play again'), 'rematch', True, not self.rematch and not self.demo)
-            self.button((729, 539, 256, 54), self.t('返回大厅', 'Return to lobby'), 'menu')
+            self.button((1054, 696, 334, 54), self.t('等待对方同意', 'Waiting for opponent') if self.rematch else self.t('再来一局', 'Play again'), 'rematch', True, not self.rematch and not self.demo)
+            self.button((1054, 770, 334, 54), self.t('返回大厅', 'Return to lobby'), 'menu')
         else:
             seconds = max(0, int(gs.result_timer-time.time())+1)
-            self.text(self.t(f'{seconds} 秒后继续', f'Continuing in {seconds}s'), 455, 549, 21, GOLD)
+            self.text(self.t(f'{seconds} 秒后下一局', f'Next round in {seconds}s'), 1056, 725, 19, MUTED)
+            self.wrap(self.t('下一局仍可在右侧回看本局。', 'Review this round in the sidebar after play resumes.'), pg.Rect(1056, 768, 320, 60), 16)
 
     def catalog(self):
         self.buttons = []
@@ -523,15 +558,19 @@ class App:
         self.canvas.blit(overlay, (0, 0))
         self.panel((100, 55, 1240, 790), PANEL, LINE, 22)
         self.text(self.t('王牌档案', 'THE TRUMP ARCHIVE'), 136, 86, 32, INK, True)
-        self.text(self.t('名称对照与效果速查 · 实际结算沿用原版代码', 'Names & reference effects · The original engine decides all outcomes'), 137, 137, 16, MUTED)
+        self.text(self.t('已启用的牌优先显示 · 对局中以房主配置为准', 'Enabled cards first · Host configuration applies during a match'), 137, 137, 16, MUTED)
         self.button((1190, 83, 111, 44), self.t('关闭', 'Close'), 'book')
-        names = list(CARDS)
+        enabled = getattr(self.gs, 'enabled_cards', None) if self.gs else None
+        if enabled is None:
+            enabled = enabled_cards(CARDS, engine.WEIGHTS, engine.SETTINGS)
+        names = sorted(CARDS, key=lambda name: not enabled.get(name, False))
         pages = (len(names)+14)//15
         for i, name in enumerate(names[self.book_page*15:self.book_page*15+15]):
             self.trump(name, pg.Rect(136+(i%5)*164, 190+(i//5)*158, 151, 140), self.book_selected == name, ('inspect', name))
         self.panel((976, 190, 328, 457), BG)
         name = self.book_selected
         if name:
+            self.text(self.t('已启用', 'ENABLED') if enabled.get(name, False) else self.t('抽取概率为 0', 'DRAW CHANCE: 0'), 1001, 616, 14, GOLD)
             zh, _, desc, english = info(name)
             self.text(zh if self.zh else name, 1001, 217, 25, GOLD, True, 278)
             self.text(name if self.zh else zh, 1001, 261, 16, MUTED, width=278)
@@ -602,6 +641,9 @@ class App:
         if action in ('SURRENDER', 'DRAW_OFFER', 'DRAW_ACCEPT', 'DRAW_DECLINE'):
             self.command(action)
             self.overlay = None
+            return
+        if action == 'last_result':
+            self.selected = None
             return
         if action == 'close_overlay':
             self.overlay = None
@@ -812,15 +854,17 @@ class App:
             self.text(self.t('本次对局进度不会保留。', 'This game’s progress will not be saved.'), 456, 404, 18, MUTED)
             self.button((456, 482, 246, 54), self.t('继续对战', 'Keep playing'), 'continue', True)
             self.button((722, 482, 260, 54), self.t('返回大厅', 'Return to lobby'), 'menu')
-        if self.drag and not self.book and not self.overlay and not self.leave_prompt:
-            target = self.drag_target(self.mouse)
-            point = self.mouse
-            if abs(point[0]-self.drag['start'][0])+abs(point[1]-self.drag['start'][1]) > 12:
-                if target == 'TRUMP':
-                    pg.draw.rect(self.canvas, GOLD, (32, 151, 978, 479), 3)
-                self.panel((int(point[0])-70, int(point[1])-95, 190, 85), (60, 28, 20), RED if target == 'DISCARD' else GOLD)
-                label = self.t('松手弃置', 'Release to discard') if target == 'DISCARD' else self.t('松手出牌', 'Release to play') if target == 'TRUMP' else self.t('拖至牌桌 / 向右弃牌', 'Up: play / Right: discard')
-                self.text(label, int(point[0])-60, int(point[1])-70, 16, INK, True, 170)
+        if self.drag and self.drag_moved() and not self.book and not self.overlay and not self.leave_prompt:
+            index = self.drag['index']
+            cards = getattr(self.gs, f'p{self.pid}_trumps')
+            if index < len(cards):
+                origin = self.drag.get('origin', (32+(index%6)*165, 706))
+                dx, dy = self.mouse[0]-self.drag['start'][0], self.mouse[1]-self.drag['start'][1]
+                rect = pg.Rect(origin[0]+dx, origin[1]+dy, 153, 140)
+                shadow = pg.Surface((159, 146), pg.SRCALPHA)
+                shadow.fill((0, 0, 0, 95))
+                self.canvas.blit(shadow, (rect.x+5, rect.y+8))
+                self.trump(cards[index][0], rect, True, None, floating=True)
         self.canvas.blit(self.theme.scan, (0, 0))
 
     def present(self):
@@ -831,6 +875,9 @@ class App:
         self.window.fill(BG)
         self.window.blit(pg.transform.smoothscale(self.canvas, scaled), self.viewport)
         pg.display.flip()
+
+    def drag_moved(self):
+        return bool(self.drag and abs(self.mouse[0]-self.drag['start'][0])+abs(self.mouse[1]-self.drag['start'][1]) > 12)
 
     def drag_target(self, point):
         if not self.drag:
@@ -874,7 +921,7 @@ class App:
                             if rect.collidepoint(point):
                                 self.action(action)
                                 if isinstance(action, tuple) and action[0] == 'select' and self.can_act() and not self.book and not self.overlay:
-                                    self.drag = dict(index=action[1], start=point, token=(self.gs.round_id, tuple(getattr(self.gs, f'p{self.pid}_trumps'))))
+                                    self.drag = dict(index=action[1], start=point, origin=rect.topleft, token=(self.gs.round_id, tuple(getattr(self.gs, f'p{self.pid}_trumps'))))
                                 break
                     elif event.type == pg.MOUSEBUTTONUP and event.button == 1:
                         point = ((event.pos[0]-self.viewport.x)/self.scale, (event.pos[1]-self.viewport.y)/self.scale)

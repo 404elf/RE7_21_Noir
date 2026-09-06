@@ -7,6 +7,6 @@
   "initial_minutes": 3,
   "increment_seconds": 3,
   "_comment_increment": "3+3 = initial_minutes:3, increment_seconds:3。仅抽牌/停牌交接行动后加秒，出牌和弃牌不加秒。结算与等待连接不计时。",
-  "settlement_seconds": 1,
-  "_comment_settlement": "结算等待秒数，默认1，设为0取消等待，最高60。"
+  "settlement_seconds": 3,
+  "_comment_settlement": "结算亮牌等待秒数，默认3，设为0取消等待，最高60。上一局结果保留于侧栏。"
 }

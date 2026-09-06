@@ -6,6 +6,8 @@ import pygame as pg
 class HorrorTheme:
     def __init__(self, size):
         self.cache = {}
+        self.blood_key = None
+        self.table_blood = pg.Surface((978, 479), pg.SRCALPHA)
         self.background = pg.Surface(size)
         width, height = size
         rng = random.Random(721)
@@ -41,6 +43,19 @@ class HorrorTheme:
             pg.draw.circle(surface, rng.choice([(64, 15, 12), (80, 19, 15), (48, 13, 11)]), (x, y), radius)
             if radius > 8:
                 pg.draw.line(surface, (57, 13, 11), (x, y), (x+2, y+rng.randint(15, 50)), 2)
+
+    def accumulated_blood(self, losses, pid):
+        # Cached transparent layer drawn below cards/text, with deterministic positions.
+        key = (min(400, int(losses.get(pid, 0))), min(400, int(losses.get(3-pid, 0))))
+        if self.blood_key != key:
+            self.blood_key = key
+            self.table_blood.fill((0, 0, 0, 0))
+            for side, amount in enumerate(key):
+                rng = random.Random(72133+side)
+                for point in range(amount):
+                    center = (rng.randint(15, 960), rng.randint(280, 475) if side == 0 else rng.randint(10, 165))
+                    self.blood(self.table_blood, center, rng.randint(24, 58), side*1000+point)
+        return self.table_blood
 
     def panel(self, size, fill, border):
         key = (tuple(size), fill, border)

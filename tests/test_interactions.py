@@ -45,6 +45,8 @@ class InteractionTests(unittest.TestCase):
             m.gs.p1_hand, m.gs.p2_hand = [5], [5]
             r = m.gs.round_id
             m.finish_round()
+            saved = m.gs.last_result
+            self.assertEqual(saved['hands'], [[5], [5]])
             self.assertEqual(m.gs.result_timer, c.now+delay)
             if delay:
                 c.advance(delay/2)
@@ -53,7 +55,9 @@ class InteractionTests(unittest.TestCase):
                 c.advance(delay/2)
             m.tick()
             self.assertEqual(m.gs.round_id, r+1)
-        self.assertEqual(timer_config({})['settlement_seconds'], 1)
+            self.assertEqual(m.gs.last_result, saved)
+            self.assertEqual(saved['hands'], [[5], [5]])
+        self.assertEqual(timer_config({})['settlement_seconds'], 3)
         self.assertEqual(timer_config(dict(settlement_seconds=-5))['settlement_seconds'], 0)
 
     def test_drag_targets_and_stale_hand(self):
