@@ -24,6 +24,7 @@ from match import load_timer, timer_config
 from session_server import server_worker
 from updater import Updater
 from history import History, describe
+from motion import CardMotion
 from horror_theme import HorrorTheme
 from presentation_rules import enabled_cards
 
@@ -166,6 +167,9 @@ class App:
         self.host = False
         self.demo = False
         self.selected = None
+        self.motion = CardMotion()
+        self.pending_motion = None
+        self.animation_origin = None
         self.drag = None
         self.selection_token = None
         self.page = 0
@@ -377,6 +381,9 @@ class App:
     def hand(self, hand, x, y, width, opponent=False):
         card_w = min(83, max(33, width // max(1, len(hand))-9))
         for index, value in enumerate(hand):
+            pid = 3-self.pid if opponent else self.pid
+            if self.motion.hides((self.gs.round_id, pid, index, tuple(hand[1:] if opponent and self.gs.phase == 'ACTION' else hand))):
+                continue
             self.number_card(value, x+index*(card_w+9), y, card_w, 107,
                              hidden=opponent and index == 0 and self.gs.phase == 'ACTION',
                              secret=not opponent and index == 0 and self.gs.phase == 'ACTION')
@@ -670,6 +677,59 @@ class App:
         self.text(f'{self.book_page+1} / {pages}   ·   {len(CARDS)} '+self.t('张王牌', 'trumps'), 318, 770, 17, GOLD)
         self.button((1153, 758, 150, 46), self.t('下一页', 'Next'), 'book_next', enabled=self.book_page+1 < pages)
 
+    def card_sprite(self, value=None, name=None, width=83, hidden=False):
+        original = self.canvas
+        sprite = pg.Surface((153, 140) if name else (width, 107), pg.SRCALPHA)
+        self.canvas = sprite
+        try:
+            if name:
+                self.trump(name, sprite.get_rect(), False, None, floating=True)
+            else:
+                self.number_card(value, 0, 0, width, 107, hidden=hidden)
+        finally:
+            self.canvas = original
+        return sprite
+
+    def animate_state(self, before, after):
+        fresh = before is None or before.round_id != after.round_id or getattr(before, 'match_id', None) != getattr(after, 'match_id', None)
+        if fresh:
+            self.motion.items.clear()
+            self.pending_motion = None
+        for pid in (1, 2):
+            opponent = pid != self.pid
+            hand = getattr(after, f'p{pid}_hand')
+            prior = getattr(before, f'p{pid}_hand') if before and not fresh else []
+            width = min(83, max(33, 580//max(1,len(hand))-9))
+            # Hidden values never enter animation sprites or identity keys.
+            identity = tuple(hand[1:] if opponent and after.phase == 'ACTION' else hand)
+            for index, value in enumerate(hand):
+                flip = opponent and index == 0 and before and before.phase == 'ACTION' and after.phase != 'ACTION' and not fresh
+                if index < len(prior) and not flip:
+                    continue
+                hidden = opponent and index == 0 and after.phase == 'ACTION'
+                target = (236+index*(width+9),176 if opponent else 447)
+                sprite = self.card_sprite(None if hidden else value,width=width,hidden=hidden)
+                self.motion.add(sprite,target if flip else (1239,178),target,
+                                'flip' if flip else 'deal', (after.round_id,pid,index,identity),
+                                min(index*.055,.22) if fresh else 0,
+                                self.card_sprite(width=width,hidden=True) if flip else None)
+        if before and not fresh:
+            seen = max((entry['id'] for entry in getattr(before,'action_log',[])),default=0)
+            for entry in getattr(after,'action_log',[]):
+                if entry['id'] <= seen or entry['event'] not in ('trump','discard'):
+                    continue
+                mine = entry['pid'] == self.pid
+                pending = self.pending_motion if mine and self.pending_motion and self.pending_motion[2] == after.round_id else None
+                name = entry.get('card') or (pending[0] if pending else None)
+                if not name:
+                    continue
+                origin = pending[1] if pending else ((420,706) if mine else (420,176))
+                discard = entry['event'] == 'discard'
+                target = (min(1400,origin[0]+270),origin[1]+35) if discard else (465,325)
+                self.motion.add(self.card_sprite(name=name),origin,target,'discard' if discard else 'play')
+                if mine:
+                    self.pending_motion = None
+
     def receive(self):
         latest = None
         sound_events = []
@@ -711,6 +771,7 @@ class App:
             if token != self.selection_token:
                 self.selected = None
                 self.selection_token = token
+            self.animate_state(self.gs, latest)
             self.gs = latest
             self.scene = 'game'
             if latest.phase == 'ACTION':
@@ -723,6 +784,12 @@ class App:
         if name not in ('REMATCH', 'SURRENDER', 'DRAW_OFFER', 'DRAW_ACCEPT', 'DRAW_DECLINE') and not self.can_act():
             return
         if self.connection.send(name, self.gs.round_id):
+            if name.startswith(('TRUMP:', 'DISCARD:')):
+                idx = int(name.split(':')[1])
+                cards = getattr(self.gs, f'p{self.pid}_trumps')
+                if 0 <= idx < len(cards):
+                    self.pending_motion = (cards[idx][0], self.animation_origin or (32+(idx%6)*165, 706), self.gs.round_id)
+            self.animation_origin = None
             self.sound_tracker.sent(name, self.gs, self.pid)
             self.cooldown = time.monotonic()+.55
         else:
@@ -833,6 +900,8 @@ class App:
             self.connection.open('127.0.0.1' if self.host else self.ip.strip(), self.host,
                                  (self.difficulty, self.style) if self.solo else None, self.timer)
         elif action == 'menu':
+            self.motion.items.clear()
+            self.pending_motion = None
             self.overlay = None
             self.drag = None
             self.sound_tracker.reset()
@@ -940,6 +1009,7 @@ class App:
 
     def render(self):
         self.updater.poll()
+        self.motion.prune()
         if self.notice and time.monotonic() >= self.notice[1]:
             self.notice = None
         if not self.notice and self.notice_queue:
@@ -960,6 +1030,8 @@ class App:
             self.text(self.t('界面预览 · 非真实对局', 'UI PREVIEW · NOT A LIVE GAME'), 1015, 872, 14, GOLD)
         else:
             self.text(self.t('中文 / EN   ·   原版规则', '中文 / EN   ·   ORIGINAL RULES'), 1117, 875, 11, MUTED)
+        if self.scene == 'game' and not self.book and not self.overlay and not self.leave_prompt:
+            self.motion.draw(self.canvas)
         if self.book:
             self.catalog()
         if self.overlay:
@@ -1020,6 +1092,7 @@ class App:
         if target == 'TRUMP' and not self.trump_allowed(trumps[drag['index']]):
             self.sound.play('error')
             return
+        self.animation_origin = (point[0]-76, point[1]-70)
         self.command(f"{target}:{drag['index']}")
         self.selected = None
 

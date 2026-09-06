@@ -156,7 +156,7 @@ class Updater:
         try:
             self.current = read_json(self.root/'version.json')['version']
         except (OSError, ValueError, KeyError):
-            self.current = '1.3.6'
+            self.current = '1.3.7'
 
     def start(self, download=False):
         if self.busy:
