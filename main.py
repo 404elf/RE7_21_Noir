@@ -24,6 +24,7 @@ from match import load_timer, timer_config
 from session_server import server_worker
 from updater import Updater
 from history import History, describe
+from config_editor import ConfigEditor
 from motion import CardMotion
 from horror_theme import HorrorTheme
 from presentation_rules import enabled_cards
@@ -147,6 +148,7 @@ class App:
         self.timer = load_timer(audio_root)
         self.updater = Updater(audio_root)
         self.history = History(audio_root)
+        self.editor = None
         self.overlay = None
         self.log_page = 0
         self.state_received_at = time.monotonic()
@@ -270,6 +272,7 @@ class App:
         if self.scene == 'menu':
             self.button((300, 27, 120, 42), self.t('手动更新', 'Updates'), 'updates')
         if self.scene in ('menu', 'solo_setup'):
+            self.button((900, 27, 164, 42), self.t('游戏配置', 'Settings'), 'config')
             self.button((434, 27, 154, 42), self.t('计时设置', 'Time control'), 'timers')
         elif self.scene == 'game':
             self.button((434, 27, 154, 42), self.t('战斗日志', 'Action log'), 'history')
@@ -796,6 +799,29 @@ class App:
             self.connection.events.put((self.connection.generation, 'error', 'connection'))
 
     def action(self, action):
+        if action == 'config':
+            try:
+                if self.editor is None:
+                    self.editor = ConfigEditor(self.data_root, engine.GAME_CONFIG)
+                self.overlay = 'config'
+            except (OSError, ValueError) as exc:
+                self.error = str(exc)
+            return
+        if isinstance(action, tuple) and action[0] == 'cfg':
+            try:
+                file = self.editor.action(action)
+                if file == 'config.json':
+                    engine.GAME_CONFIG = engine.load_config()
+                    engine.SETTINGS = engine.GAME_CONFIG['game_settings']
+                    engine.WEIGHTS = engine.GAME_CONFIG['trump_weights']
+                    engine.MAX_HP = engine.SETTINGS['max_hp']
+                    engine.MAX_TRUMPS = engine.SETTINGS['max_trumps_hand_size']
+                    engine.MAX_TABLE_SLOTS = engine.SETTINGS['max_active_trumps_on_table']
+                elif file == 'timer.json': self.timer = load_timer(self.data_root)
+                elif file == 'audio.json': self.sound = SoundManager(self.data_root)
+            except (OSError, ValueError, TypeError) as exc:
+                self.editor.message = str(exc)
+            return
         if action in ('updates', 'timers', 'history', 'match_options'):
             self.overlay = action
             return
@@ -936,6 +962,9 @@ class App:
             self.book_page = min((len(CARDS)-1)//15, self.book_page+1)
 
     def utility_panel(self):
+        if self.overlay == 'config':
+            self.editor.render(self)
+            return
         self.buttons = []
         shade = pg.Surface((W, H), pg.SRCALPHA)
         shade.fill((4, 9, 8, 235))
@@ -1122,6 +1151,12 @@ class App:
                     elif event.type == pg.WINDOWFOCUSLOST:
                         self.drag = None
                     elif event.type == pg.KEYDOWN:
+                        if self.overlay == 'config' and self.editor.editing is not None:
+                            try:
+                                self.editor.key(event)
+                            except (ValueError, TypeError) as exc:
+                                self.editor.message = str(exc)
+                            continue
                         if event.key == pg.K_ESCAPE:
                             self.drag = None
                             if self.overlay:
