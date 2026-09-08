@@ -16,7 +16,7 @@ import json
 os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 import pygame as pg
 import re7_21 as engine
-from re7_21 import GameState  # legacy pickle compatibility: __main__.GameState
+from re7_21 import GameState
 from cards import CARDS, CATEGORIES, info
 from bot import BotSession, DIFFICULTIES, STYLES
 from sound import SoundManager, SoundTracker
@@ -28,6 +28,8 @@ from config_editor import ConfigEditor
 from motion import CardMotion
 from horror_theme import HorrorTheme
 from presentation_rules import enabled_cards
+from networking import EventQueue, connect, endpoint, discover, room_loop
+from network_panel import NetworkPanel
 
 ROOT = Path(__file__).resolve().parent
 W, H = 1440, 900
@@ -42,9 +44,10 @@ RED = (232, 104, 83)
 
 
 class Connection:
-    """Owns only the UI connection and optional legacy server subprocess."""
+    """Owns the safe UI connection and optional session server subprocess."""
     def __init__(self):
-        self.events = queue.Queue()
+        self.events = EventQueue()
+        self.send_lock = threading.Lock()
         self.sock = None
         self.server = None
         self.generation = 0
@@ -86,13 +89,16 @@ class Connection:
                         argv = [sys.executable, '--server'] if getattr(sys, 'frozen', False) else [sys.executable, str(ROOT / 'server.py')]
                         if timer is not None:
                             argv += ['--timer', json.dumps(timer)]
+                        environment=os.environ.copy()
+                        if bot_options: environment['RE7_BIND']='127.0.0.1'
                         self.server = subprocess.Popen(
                             argv, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            env=environment,
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 deadline = time.monotonic() + 5
                 while generation == self.generation:
                     try:
-                        connected = socket.create_connection((address, engine.DEFAULT_PORT), timeout=1)
+                        connected = connect(address, engine.DEFAULT_PORT)
                         break
                     except OSError:
                         if not host or time.monotonic() >= deadline:
@@ -116,7 +122,7 @@ class Connection:
                             on_error=lambda: self.events.put((generation, 'error', 'bot')),
                             on_mood=lambda mood: self.events.put((generation, 'mood', mood)))
                         self.bot.start()
-                connected.settimeout(None)
+                connected.settimeout(310)  # Waiting rooms are bounded; match snapshots arrive frequently.
                 while generation == self.generation:
                     state = engine.recv_msg(connected)
                     if not isinstance(state, GameState):
@@ -135,7 +141,15 @@ class Connection:
         threading.Thread(target=worker, daemon=True).start()
 
     def send(self, command, round_id):
-        return engine.send_msg(self.sock, f'{command}:{round_id}')
+        with self.send_lock:
+            return engine.send_msg(self.sock, f'{command}:{round_id}')
+
+    def open_room(self,address,create=False,code='',password='',rules=None,timer=None):
+        self.close()
+        threading.Thread(target=room_loop,args=(self,address,create,code,password,rules or {},timer or {}),daemon=True).start()
+
+    def ready(self):
+        with self.send_lock: return engine.send_msg(self.sock,dict(op='ready'))
 
 
 class App:
@@ -145,6 +159,8 @@ class App:
         self.sound = SoundManager(audio_root)
         self.sound_tracker = SoundTracker()
         self.data_root = audio_root
+        self.network = NetworkPanel(audio_root)
+        self.net_room='';self.net_lobby=None;self.net_status='';self.net_latency=None;self.net_rules_page=0
         self.timer = load_timer(audio_root)
         self.updater = Updater(audio_root)
         self.history = History(audio_root)
@@ -315,7 +331,7 @@ class App:
         self.text(self.t('欢迎来到游戏', 'WELCOME TO THE GAME'), 820, 178, 28, INK, True)
         self.text(self.t('坐下。看看谁能撑到最后。', 'Take a seat. See who makes it out.'), 822, 231, 17, MUTED)
         self.button((822, 285, 244, 60), self.t('人机对战   →', 'Play against AI   →'), 'solo_setup', True)
-        self.button((1082, 285, 246, 60), self.t('创建联机房间', 'Host multiplayer'), 'host')
+        self.button((1082, 285, 246, 60), self.t('选择联机方式', 'Multiplayer options'), 'network')
         self.text(self.t('房主计时：', 'Host clock: ')+self.clock_label(), 822, 360, 15, MUTED)
         pg.draw.line(self.canvas, LINE, (822, 402), (1328, 402))
         self.text(self.t('加入已有房间', 'JOIN AN EXISTING ROOM'), 822, 426, 16, GOLD)
@@ -350,6 +366,19 @@ class App:
         self.text(self.t('公平对局 · AI 看不到你的暗牌 · 沿用你的自定义规则', 'Fair play · AI cannot see your hidden card · Your custom rules apply'), 183, 802, 17, MUTED)
 
     def waiting(self):
+        if self.net_room:
+            self.panel((220,160,1000,625))
+            self.text(self.t('房间码：','ROOM CODE: ')+self.net_room,260,195,38,GOLD,True)
+            lobby=self.net_lobby or {}
+            self.text(self.t('已入座 / 已准备：','Seated / ready: ')+f"{lobby.get('players',1)} / {len(lobby.get('ready',[]))}",260,265,23)
+            settings=lobby.get('rules',{}).get('game_settings',{})
+            self.text(self.t('生命 / 目标 / 起手王牌：','Health / target / starting trumps: ')+f"{settings.get('max_hp','—')} / {settings.get('target_score','—')} / {settings.get('initial_trumps_count',0)+1}",260,323,21)
+            self.wrap(self.t('双方确认规则后点击准备。服务器统一配置，掉线可在 30 秒内自动重连。','Review the server rules and ready up. Automatic reconnect reserves your seat for 30 seconds.'),pg.Rect(260,390,900,80),21)
+            self.button((260,500,430,55),self.t('查看全部规则','Review all rules'),'network_rules')
+            self.button((710,500,430,55),self.t('已准备','Ready') if self.pid in lobby.get('ready',[]) else self.t('准备开始','Ready up'),'network_ready',True,enabled=self.pid not in lobby.get('ready',[]))
+            self.text(self.net_status,260,600,20,RED)
+            self.button((260,675,880,55),self.t('离开房间','Leave room'),'menu')
+            return
         self.panel((350, 240, 740, 390))
         self.text('· · ·', 661, 276, 48, GOLD)
         title = self.t('正在准备 AI 对手', 'Preparing your AI opponent') if self.solo else self.t('等待对手入座', 'Waiting for an opponent') if self.scene == 'waiting' else self.t('正在连接房间', 'Connecting to the room')
@@ -390,7 +419,7 @@ class App:
                              secret=not opponent and index == 0 and self.gs.phase == 'ACTION')
 
     def can_act(self):
-        return bool(self.gs and self.gs.phase == 'ACTION' and self.gs.turn == self.pid and time.monotonic() >= self.cooldown and not self.demo)
+        return bool(self.gs and self.gs.phase == 'ACTION' and self.gs.turn == self.pid and time.monotonic() >= self.cooldown and not self.demo and not getattr(self.gs,'network_paused',False) and not self.net_status)
 
     def trump_allowed(self, card):
         if any(t['owner'] != self.pid and t['type'] == 'DESTROY_BLOCK' for t in self.gs.active_trumps):
@@ -450,7 +479,7 @@ class App:
         remaining = getattr(gs, 'clock_remaining', {})
         active = getattr(gs, 'clock_active', 0)
         if getattr(gs, 'clock_config', {}).get('enabled'):
-            elapsed = min(2, max(0, time.monotonic()-self.state_received_at))
+            elapsed = 0 if getattr(gs,'network_paused',False) or self.net_status else min(2, max(0, time.monotonic()-self.state_received_at))
             for pid, y in ((3-self.pid, 270), (self.pid, 555)):
                 seconds = max(0, remaining.get(pid, 0)-(elapsed if active == pid else 0))
                 color = RED if seconds < 10 else INK if active == pid else MUTED
@@ -746,16 +775,24 @@ class App:
                 self.scene = 'waiting'
                 sound_events.append('connected')
             elif event == 'state':
+                self.net_status=self.t('对手掉线，等待重连（最多 30 秒）','Opponent disconnected; waiting up to 30s') if getattr(value,'network_paused',False) else ''
                 self.observe_notices(value)
                 self.history.ingest(value)
                 sound_events.extend(self.sound_tracker.update(value, self.pid))
                 latest = value
             elif event == 'mood':
                 self.bot_mood = value
+            elif event == 'room': self.net_room=value;self.net_status=''
+            elif event == 'lobby': self.net_lobby=value
+            elif event == 'latency': self.net_latency=value
+            elif event == 'reconnecting': self.net_status=self.t('连接中断，正在重连… ','Reconnecting… ')+str(value)+'s'
             elif event == 'error':
                 self.connection.close()
                 self.scene = 'menu'
                 self.error = self.t('端口 6666 已被占用，请关闭已有房间。', 'Port 6666 is in use. Close the existing room.') if value == 'port' else self.t('连接已中断或失败，请确认房主 IP、组网和房间状态。', 'Connection failed or closed. Check the host IP, network and room.')
+                if value=='certificate': self.error=self.t('服务器证书验证失败，请联系服主检查域名、有效期和证书链。','TLS certificate verification failed. Ask the operator to check the hostname and certificate.')
+                elif value=='tls_required': self.error=self.t('公网房间须使用 tls://域名:端口，不接受明文或忽略证书。','Internet rooms require tls://host:port with a valid certificate.')
+                elif value=='room_connection': self.error=self.t('房间连接失败：检查服务器地址、双方版本、房间码、密码和房间状态。','Room unavailable: check server, versions, code, password and room status.')
                 latest = None
                 self.sound_tracker.reset()
                 sound_events = ['error']
@@ -797,6 +834,14 @@ class App:
             self.connection.events.put((self.connection.generation, 'error', 'connection'))
 
     def action(self, action):
+        if action=='network': self.overlay='network';return
+        if action=='network_ready': self.connection.ready();return
+        if action=='network_rules': self.overlay='network_rules';return
+        if isinstance(action,tuple) and action[0]=='rules_page': self.net_rules_page=max(0,self.net_rules_page+action[1]);return
+        if isinstance(action,tuple) and action[0]=='net':
+            try: self.network.action(self,action[1],action[2])
+            except (ValueError,OSError) as exc: self.network.message=str(exc)
+            return
         if action == 'config':
             try:
                 if self.editor is None:
@@ -905,7 +950,8 @@ class App:
         elif action == 'solo_setup':
             self.scene = 'solo_setup'
             self.focus = False
-        elif action in ('host', 'join', 'solo_start'):
+        elif action in ('host', 'join', 'solo_start','room_create','room_join'):
+            self.net_room='';self.net_lobby=None;self.net_status='';self.net_latency=None
             self.sound_tracker.reset()
             self.error = ''
             self.gs = None
@@ -923,6 +969,12 @@ class App:
             self.bot_mood = None
             self.host = action in ('host', 'solo_start')
             self.scene = 'connecting'
+            if action in ('room_create','room_join'):
+                from config_editor import GAME
+                rules=dict(game_settings={row[0]:engine.SETTINGS[row[0]] for row in GAME},trump_weights={k:v for k,v in engine.WEIGHTS.items() if type(v) in (int,float)})
+                fields=self.network.values
+                self.connection.open_room(fields['server'],action=='room_create',fields['code'],fields['password'],rules,self.timer)
+                return
             self.connection.open('127.0.0.1' if self.host else self.ip.strip(), self.host,
                                  (self.difficulty, self.style) if self.solo else None, self.timer)
         elif action == 'menu':
@@ -962,6 +1014,22 @@ class App:
             self.book_page = min((len(CARDS)-1)//15, self.book_page+1)
 
     def utility_panel(self):
+        if self.overlay=='network': self.network.render(self);return
+        if self.overlay=='network_rules':
+            self.buttons=[];self.panel((120,100,1200,730))
+            self.text(self.t('房间规则（服务器统一）','SERVER RULES'),155,130,30,INK,True)
+            from config_editor import GAME, TIMER
+            settings=(self.net_lobby or {}).get('rules',{}).get('game_settings',{})
+            timer=(self.net_lobby or {}).get('timer',{})
+            rows=[(self.t(row[1],row[2]),settings.get(row[0],'—')) for row in GAME]+[(self.t(row[1],row[2]),timer.get(row[0],'—')) for row in TIMER]
+            weights=(self.net_lobby or {}).get('rules',{}).get('trump_weights',{})
+            rows += [(self.t(info(name)[0],name),value) for name,value in sorted(weights.items(),key=lambda item:(item[1]==0,item[0])) if type(value) in (int,float)]
+            pages=max(1,(len(rows)+10)//11);self.net_rules_page=min(self.net_rules_page,pages-1)
+            for i,(label,value) in enumerate(rows[self.net_rules_page*11:self.net_rules_page*11+11]): self.text(label+': '+str(value),155,195+i*42,20,INK)
+            self.button((155,680,160,40),'‹',('rules_page',-1),enabled=self.net_rules_page>0)
+            self.text(f'{self.net_rules_page+1} / {pages}',345,690,18,GOLD)
+            self.button((460,680,160,40),'›',('rules_page',1),enabled=self.net_rules_page+1<pages)
+            self.button((155,740,1110,55),self.t('返回房间','Back to room'),'close_overlay');return
         if self.overlay == 'config':
             self.editor.render(self)
             return
@@ -1061,6 +1129,8 @@ class App:
             self.text(self.t('中文 / EN   ·   原版规则', '中文 / EN   ·   ORIGINAL RULES'), 1117, 875, 11, MUTED)
         if self.scene == 'game' and not self.book and not self.overlay and not self.leave_prompt:
             self.motion.draw(self.canvas)
+            if self.net_room:
+                self.text(self.net_status or self.t('房间服务 · ','Room service · ')+self.net_room+(f' · {self.net_latency} ms' if self.net_latency is not None else ''),280,875,14,RED if self.net_status else GOLD,width=800)
         if self.book:
             self.catalog()
         if self.overlay:
@@ -1151,6 +1221,8 @@ class App:
                     elif event.type == pg.WINDOWFOCUSLOST:
                         self.drag = None
                     elif event.type == pg.KEYDOWN:
+                        if self.overlay=='network' and self.network.editing is not None:
+                            self.network.key(event);continue
                         if self.overlay == 'config' and self.editor.editing is not None:
                             try:
                                 self.editor.key(event)
@@ -1213,9 +1285,14 @@ if __name__ == '__main__':
     parser.add_argument('--english', action='store_true')
     parser.add_argument('--server', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--timer', help=argparse.SUPPRESS)
+    parser.add_argument('--room-server', metavar='CONFIG',help='Run the TLS room service using a local JSON configuration')
     args = parser.parse_args()
+    if args.room_server:
+        import asyncio
+        from room_server import serve
+        asyncio.run(serve(json.loads(Path(args.room_server).read_text(encoding='utf-8-sig'))))
+        sys.exit(0)
     if args.server:
-        GameState.__module__ = '__main__'
         config_root = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else ROOT
         server_worker(json.loads(args.timer) if args.timer else load_timer(config_root))
         sys.exit(0)

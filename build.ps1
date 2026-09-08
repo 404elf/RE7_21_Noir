@@ -1,4 +1,4 @@
-param([string]$OutputRoot = 'dist/v1.3.9')
+param([string]$OutputRoot = 'dist/v1.4.0')
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $packageRoot = Join-Path $OutputRoot 'RE7_21_Noir'
@@ -21,5 +21,8 @@ Copy-Item -LiteralPath audio.json -Destination (Join-Path $packageRoot 'audio.js
 Copy-Item -LiteralPath sounds -Destination (Join-Path $packageRoot 'sounds') -Recurse
 Copy-Item -LiteralPath presets -Destination (Join-Path $packageRoot 'presets') -Recurse
 foreach ($name in @('timer.json', 'updates.json', 'version.json')) {
+    Copy-Item -LiteralPath $name -Destination (Join-Path $packageRoot $name)
+}
+foreach ($name in @('network.json','room-server.json','start-room-server.cmd','NETWORKING.md','SECURITY.md')) {
     Copy-Item -LiteralPath $name -Destination (Join-Path $packageRoot $name)
 }

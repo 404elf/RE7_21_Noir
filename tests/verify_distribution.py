@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 from re7_21 import GameState, recv_msg, send_msg
 import pygame
 
-output = Path(sys.argv[1]).resolve() if len(sys.argv)>1 else ROOT/'dist/v1.3.9'
+output = Path(sys.argv[1]).resolve() if len(sys.argv)>1 else ROOT/'dist/v1.4.0'
 exe = output/'RE7_21_Noir/RE7_21_Noir.exe'
 screenshot = output/'packaged-preview.png'
 subprocess.run([str(exe), '--preview', '--screenshot', str(screenshot)], check=True, timeout=30)

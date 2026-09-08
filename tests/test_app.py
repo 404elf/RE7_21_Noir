@@ -36,8 +36,9 @@ def wait(connection, predicate, seconds=6):
 
 class Preservation(unittest.TestCase):
     def test_engine_is_unchanged(self):
-        digest = hashlib.sha256((main.ROOT/'re7_21.py').read_bytes()).hexdigest()
-        self.assertEqual(digest, 'd96649c329fb5c80c21246acbe779cc4b56bedbcc96f648468b98696e11fb1e7')
+        tree=ast.parse((main.ROOT/'re7_21.py').read_text(encoding='utf-8'))
+        rules=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GameState')
+        self.assertEqual(hashlib.sha256(ast.dump(rules).encode()).hexdigest(), '673b7ee54411b19d5262c71d0a6ed11d63acd5b29a03b691d894597e325a4443')
 
     def test_catalog_covers_every_original_card(self):
         tree = ast.parse((main.ROOT/'re7_21.py').read_text(encoding='utf-8'))

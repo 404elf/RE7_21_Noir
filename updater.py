@@ -133,7 +133,7 @@ def install(root, release, fetch=request):
     exe = package/'RE7_21_Noir.exe'
     if not exe.is_file():
         raise ValueError('missing_executable')
-    for name in ('config.json', 'audio.json', 'timer.json', 'updates.json'):
+    for name in ('config.json', 'audio.json', 'timer.json', 'updates.json','network.json','room-server.json'):
         preserve(root/name, package/name, package/'package-defaults'/name)
     sound_root = root/'sounds'
     if sound_root.is_dir():
@@ -162,7 +162,7 @@ class Updater:
         try:
             self.current = read_json(self.root/'version.json')['version']
         except (OSError, ValueError, KeyError):
-            self.current = '1.3.9'
+            self.current = '1.4.0'
 
     def start(self, download=False):
         if self.busy:
