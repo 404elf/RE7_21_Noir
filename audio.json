@@ -1,109 +1,109 @@
 {
   "_comment": "音效独立配置；每位玩家只影响自己的声音。修改后重启游戏。音量范围 0.0–1.0。",
   "enabled": true,
-  "master_volume": 0.65,
+  "master_volume": 0.55,
   "ui_volume": 0.45,
   "game_volume": 0.75,
-  "result_volume": 0.8,
+  "result_volume": 0.55,
   "_comment_events": "file 相对于此配置文件，可替换为自己的 WAV / OGG 文件。单项 enabled=false 关闭该音效；volume 为该项音量倍率。",
   "events": {
     "ui_click": {
-      "file": "sounds/basement/ui_click.wav",
+      "file": "sounds/tactile/ui_click.wav",
       "enabled": true,
       "volume": 1.0
     },
     "card_select": {
-      "file": "sounds/basement/card_select.wav",
+      "file": "sounds/tactile/card_select.wav",
       "enabled": true,
       "volume": 1.0
     },
     "connected": {
-      "file": "sounds/basement/connected.wav",
+      "file": "sounds/tactile/connected.wav",
       "enabled": true,
       "volume": 1.0
     },
     "round_start": {
-      "file": "sounds/basement/round_start.wav",
+      "file": "sounds/tactile/round_start.wav",
       "enabled": true,
       "volume": 1.0
     },
     "card_draw": {
-      "file": "sounds/basement/card_draw.wav",
+      "file": "sounds/tactile/card_draw.wav",
       "enabled": true,
       "volume": 1.0
     },
     "card_move": {
-      "file": "sounds/basement/card_move.wav",
+      "file": "sounds/tactile/card_move.wav",
       "enabled": true,
       "volume": 1.0
     },
     "trump_play": {
-      "file": "sounds/basement/trump_play.wav",
+      "file": "sounds/tactile/trump_play.wav",
       "enabled": true,
       "volume": 1.0
     },
     "trump_change": {
-      "file": "sounds/basement/trump_change.wav",
+      "file": "sounds/tactile/trump_change.wav",
       "enabled": true,
       "volume": 1.0
     },
     "card_discard": {
-      "file": "sounds/basement/card_discard.wav",
+      "file": "sounds/tactile/card_discard.wav",
       "enabled": true,
       "volume": 1.0
     },
     "stay": {
-      "file": "sounds/basement/stay.wav",
+      "file": "sounds/tactile/stay.wav",
       "enabled": true,
       "volume": 1.0
     },
     "your_turn": {
-      "file": "sounds/basement/your_turn.wav",
+      "file": "sounds/tactile/your_turn.wav",
       "enabled": true,
       "volume": 1.0
     },
     "bust": {
-      "file": "sounds/basement/bust.wav",
+      "file": "sounds/tactile/bust.wav",
       "enabled": true,
       "volume": 1.0
     },
     "damage": {
-      "file": "sounds/basement/damage.wav",
+      "file": "sounds/tactile/damage.wav",
       "enabled": true,
       "volume": 1.0
     },
     "error": {
-      "file": "sounds/basement/error.wav",
+      "file": "sounds/tactile/error.wav",
       "enabled": true,
       "volume": 1.0
     },
     "round_win": {
-      "file": "sounds/basement/round_win.wav",
+      "file": "sounds/tactile/round_win.wav",
       "enabled": true,
       "volume": 1.0
     },
     "round_loss": {
-      "file": "sounds/basement/round_loss.wav",
+      "file": "sounds/tactile/round_loss.wav",
       "enabled": true,
       "volume": 1.0
     },
     "round_draw": {
-      "file": "sounds/basement/round_draw.wav",
+      "file": "sounds/tactile/round_draw.wav",
       "enabled": true,
       "volume": 1.0
     },
     "game_win": {
-      "file": "sounds/basement/game_win.wav",
+      "file": "sounds/tactile/game_win.wav",
       "enabled": true,
       "volume": 1.0
     },
     "game_loss": {
-      "file": "sounds/basement/game_loss.wav",
+      "file": "sounds/tactile/game_loss.wav",
       "enabled": true,
       "volume": 1.0
     },
     "game_draw": {
-      "file": "sounds/basement/game_draw.wav",
+      "file": "sounds/tactile/game_draw.wav",
       "enabled": true,
       "volume": 1.0
     }

@@ -46,6 +46,8 @@ def describe(entry, zh=True):
         'timeout': (f'{player} 时间耗尽', f'{player} runs out of time'),
         'rematch': (f'{player} 请求再来一局', f'{player} requests a rematch'),
     }
+    if event == 'hit' and entry.get('drawn'):
+        return player+(' 抽到 ' if zh else ' draws ')+', '.join(map(str, entry['drawn']))
     if event == 'trump':
         name = info(entry['card'])[0] if zh else entry['card']
         return f'{player} '+('使用 ' if zh else 'plays ')+name

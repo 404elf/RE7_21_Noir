@@ -80,10 +80,21 @@ def generate(directory):
         'game_win': (1.3, 73, 15, .40), 'game_loss': (1.5, 32, 16, .48),
         'game_draw': (1., 58, 17, .32),
     }
-    effects = {name: basement(*spec) for name, spec in specs.items()}
-    effects.update(card_draw=swipe(.23, 31, level=.22),
-                   card_move=swipe(.18, 32, -1, .20),
-                   card_discard=swipe(.30, 33, -1, .27))
+    def tactile(length, frequency, seed, level):
+        rng = random.Random(seed)
+        low = slower = 0.
+        out = []
+        for i in range(int(length*RATE)):
+            t=i/RATE
+            low += .16*(rng.uniform(-1,1)-low)
+            slower += .025*(low-slower)
+            envelope = min(1.,t/.014)*max(0.,1-t/length)**2
+            out.append((low-slower)*envelope*level*.9)
+        return out
+    effects = {name: tactile(*spec) for name, spec in specs.items()}
+    effects.update(card_draw=tactile(.23, 0, 31, .45),
+                   card_move=tactile(.18, 0, 32, .35),
+                   card_discard=tactile(.30, 0, 33, .5))
     for name, values in effects.items():
         path = directory/(name+'.wav')
         if path.exists():

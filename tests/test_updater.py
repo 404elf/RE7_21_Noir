@@ -43,11 +43,14 @@ class UpdateTests(unittest.TestCase):
             original = '{"my_config":42}'
             (root/'config.json').write_text(original)
             (root/'RE7_21_Noir.exe').write_text('old')
+            (root/'presets').mkdir()
+            (root/'presets/custom.json').write_text('{"custom":1}')
             release = dict(tag='v1.4.0', url='mock', size=len(data), digest=hashlib.sha256(data).hexdigest())
             exe = install(root, release, lambda url: io.BytesIO(data))
             self.assertTrue(exe.is_file())
             self.assertEqual((root/'RE7_21_Noir.exe').read_text(), 'old')
             self.assertEqual((exe.parent/'config.json').read_text(), original)
+            self.assertEqual((exe.parent/'presets/custom.json').read_text(), '{"custom":1}')
             self.assertEqual((exe.parent/'package-defaults/config.json').read_text(), '{"new":true}')
 
     def test_checksum_failure_does_not_change_installation(self):

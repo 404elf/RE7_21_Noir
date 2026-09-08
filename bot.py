@@ -36,6 +36,9 @@ class Observation:
     opponent_draw_locked: bool = False
     table_full: bool = False
     max_trumps: int = 20
+    incoming: int = 1
+    outgoing: int = 1
+    enemy_effects: tuple = ()
 
 
 def observe(state, pid=2):
@@ -55,6 +58,9 @@ def observe(state, pid=2):
         any(t['owner'] == pid and t['type'] in ('GAMBLE', 'SILENCE') for t in table),
         sum(t['owner'] == pid for t in table) >= engine.MAX_TABLE_SLOTS,
         engine.MAX_TRUMPS,
+        max(0, 1+sum(t['val'] for t in table if t['owner']==opponent and t['type'] in ('ADD','RETURN_PLUS','PERFECT_PLUS','DEATH_DESTROY'))-sum(t['val'] for t in table if t['owner']==pid and t['type']=='SHIELD')),
+        max(0, 1+sum(t['val'] for t in table if t['owner']==pid and t['type'] in ('ADD','RETURN_PLUS','PERFECT_PLUS','DEATH_DESTROY'))-sum(t['val'] for t in table if t['owner']==opponent and t['type']=='SHIELD')),
+        tuple((t['type'], t['val']) for t in table if t['owner'] == opponent),
     )
 
 
@@ -79,6 +85,19 @@ class Strategy:
         total = sum(hand)
         # No opponent hidden-card access: average over values still unobserved.
         scores = []
+        def result(opponent):
+            if total > view.target and opponent > view.target:
+                return (opponent > total)-(opponent < total)
+            if total > view.target: return -1
+            if opponent > view.target: return 1
+            return (total > opponent)-(total < opponent)
+
+        def future(opponent, available, depth=0):
+            if opponent >= view.target*.82 or not available or depth>=3:
+                return result(opponent)
+            # Bound work for custom large decks; use evenly spaced public hypotheses.
+            choices=available if len(available)<=8 else tuple(available[i*(len(available)-1)//7] for i in range(8))
+            return sum(future(opponent+n,tuple(v for v in available if v!=n),depth+1) for n in choices)/len(choices)
         for hidden in pool or (0,):
             opponent = sum(visible)+hidden
             if total > view.target and opponent > view.target:
@@ -91,6 +110,10 @@ class Strategy:
                 outcome = (total > opponent)-(total < opponent)
             if view.opponent_stopped:
                 score = float(outcome)
+            elif self.difficulty == 'hard':
+                # Account for the opponent improving their hand, rather than assuming
+                # that a low current total is enough to protect a lead.
+                score = future(opponent,tuple(n for n in pool if n!=hidden and n not in hand))
             else:
                 # Opponent may keep drawing: do not settle merely because ahead now.
                 proximity = min(total/view.target, 1) if total <= view.target else -1-(total-view.target)/view.target
@@ -98,7 +121,7 @@ class Strategy:
             if total > view.target:
                 penalty = .12 if self.mood == 'gambler' else .5
                 if self.difficulty == 'hard':
-                    penalty *= 1 + max(0, 1-view.hp/max(1, view.max_hp))
+                    penalty = .04 if self.mood == 'gambler' else .10
                 score -= penalty
             scores.append(score)
         return sum(scores)/len(scores)
@@ -109,6 +132,21 @@ class Strategy:
         total = sum(hand)
         pool = self.unknown(view)
         baseline = self.utility(view)
+        win = max(0., min(1., (self.utility(replace(view, opponent_stopped=True))+1)/2))
+        if kind == 'TARGET':
+            return self.utility(replace(view, target=value))-baseline
+        if kind in ('ADD', 'ADD_21'):
+            if kind == 'ADD_21' and total != 21: return 0
+            return .08 + .35*win*min(value, max(0, view.opponent_hp-view.outgoing))
+        if kind == 'SHIELD':
+            return .5*(1-win)*min(value, view.incoming, view.hp)
+        if kind in ('DESTROY_SINGLE', 'DESTROY_ALL', 'DESTROY_BLOCK'):
+            harmful = sum(k in ('ADD','SHIELD','GAMBLE','SILENCE','DESIRE','DESIRE_PLUS','PERFECT_PLUS','RETURN_PLUS') for k,v in view.enemy_effects)
+            return .24*min(harmful, 1 if kind == 'DESTROY_SINGLE' else harmful)
+        if kind == 'SILENCE':
+            return .4*win if not view.opponent_stopped and not view.opponent_draw_locked else 0
+        if kind == 'GAMBLE':
+            return .8*(win-.65) if total <= view.target else 0
         if kind == 'RETURN' and len(hand) > 1:
             return self.utility(view, hand[:-1])-baseline
         if kind in ('REMOVE', 'RETURN_PLUS') and view.opponent_visible:
@@ -166,8 +204,7 @@ class Strategy:
             return .045 if room else 0
         if kind == 'OBLIVION':
             return .6 if baseline < -.65 else 0
-        # Several persistent effects are absent from the preserved original engine.
-        # Do not invent strategic benefits for them or alter the server to enable them.
+        # Unmodelled effects are held rather than played without an estimated benefit.
         return 0
 
     def choose(self, view, extra_actions=0):
@@ -194,7 +231,7 @@ class Strategy:
         if total > view.target or view.draw_locked or not view.deck_count or not pool:
             return 'STAY'
         bust = sum(total+n > view.target for n in pool)/len(pool)
-        cap = .58 if self.mood == 'gambler' else .22
+        cap = .72 if self.mood == 'gambler' else .22
         if self.difficulty == 'easy':
             threshold = view.target*(.9 if self.mood == 'gambler' else .72)
             if self.rng.random() < .18:
@@ -203,13 +240,18 @@ class Strategy:
         if self.difficulty == 'normal':
             threshold = view.target*(.93 if self.mood == 'gambler' else .78)
             return 'HIT' if total < threshold and bust <= cap else 'STAY'
+        if self.mood == 'conservative': cap = .5
         baseline = self.utility(view)
+        if self.mood == 'gambler' and total < view.target and bust <= cap:
+            # A deliberate risk appetite, independent of the cautious utility penalty.
+            if self.rng.random() < .42 and (total < view.target-1 or view.opponent_stopped):
+                return 'HIT'
         expected = sum(self.utility(view, view.hand+(n,), hidden_pool=tuple(h for h in pool if h != n)) for n in pool)/len(pool)
         # Bold opponents accept near-break-even draws; cautious ones need a margin.
-        margin = -.09 if self.mood == 'gambler' else .065
+        margin = -.09 if self.mood == 'gambler' else .015
         if self.mood == 'gambler' and view.hp < view.opponent_hp:
             margin -= .04
-        if view.opponent_stopped and baseline < -.5:
+        if view.opponent_stopped and baseline < -.25:
             cap = max(cap, .8)  # A likely loss can justify a last attempt.
         return 'HIT' if bust <= cap and expected > baseline+margin else 'STAY'
 

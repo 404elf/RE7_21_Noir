@@ -141,6 +141,12 @@ def install(root, release, fetch=request):
             if source.is_file() and not source.is_symlink() and source.resolve().is_relative_to(sound_root.resolve()):
                 relative = source.relative_to(root)
                 preserve(source, package/relative, package/'package-defaults'/relative)
+    preset_root=root/'presets'
+    if preset_root.is_dir():
+        for source in preset_root.glob('*.json'):
+            if source.is_file() and not source.is_symlink() and source.resolve().is_relative_to(preset_root.resolve()):
+                relative=source.relative_to(root)
+                preserve(source,package/relative,package/'package-defaults'/relative)
     return exe
 
 
@@ -156,7 +162,7 @@ class Updater:
         try:
             self.current = read_json(self.root/'version.json')['version']
         except (OSError, ValueError, KeyError):
-            self.current = '1.3.8'
+            self.current = '1.3.9'
 
     def start(self, download=False):
         if self.busy:

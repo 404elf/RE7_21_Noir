@@ -50,12 +50,19 @@ class HorrorTheme:
         if self.blood_key != key:
             self.blood_key = key
             self.table_blood.fill((0, 0, 0, 0))
-            self.table_blood.set_clip((194, 0, 585, 479))
+            self.table_blood.set_clip(None)
             for side, amount in enumerate(key):
                 rng = random.Random(72133+side)
                 for point in range(amount):
-                    center = (rng.randint(265, 705), rng.randint(280, 475) if side == 0 else rng.randint(10, 165))
-                    self.blood(self.table_blood, center, rng.randint(24, 58), side*1000+point)
+                    # Alternate edge seepage and table stains; text/cards render above this layer.
+                    x = rng.randint(0, 978) if point % 3 == 0 else rng.choice((rng.randint(-15, 140), rng.randint(830, 990)))
+                    y = rng.randint(280, 475) if side == 0 else rng.randint(0, 165)
+                    for _ in range(16):
+                        px, py = int(rng.gauss(x, 27)), int(rng.gauss(y, 13))
+                        w, h = rng.randint(12, 55), rng.randint(5, 22)
+                        pg.draw.ellipse(self.table_blood, (72+rng.randrange(18), 10, 13, 95), (px, py, w, h))
+                    if point % 3:
+                        pg.draw.line(self.table_blood, (87, 12, 16, 110), (x,y), (x+2,min(479,y+55)), 3)
             self.table_blood.set_clip(None)
         return self.table_blood
 

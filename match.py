@@ -210,9 +210,12 @@ class Match:
         if cmd == 'HIT':
             if gs.check_bust(pid) or any(t['owner'] == opponent and t['type'] in ('GAMBLE', 'SILENCE') for t in gs.active_trumps):
                 return False
+            before_count = len(getattr(gs, f'p{pid}_hand'))
             gs.draw_card(pid)
+            hand = getattr(gs, f'p{pid}_hand')
+            drawn = hand[before_count:] if before_count >= 1 else []
             setattr(gs, f'p{pid}_stop', False)
-            self.record('hit', pid)  # No card values or hidden hands in the public log.
+            self.record('hit', pid, drawn=drawn)  # Only newly exposed cards; never the first hidden card.
             self.handoff(pid)
             gs.cleanup_player_instants(gs.turn)
         elif cmd == 'STAY':

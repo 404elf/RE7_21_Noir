@@ -364,10 +364,8 @@ class App:
         if filled:
             pg.draw.rect(self.canvas, (158, 25, 31), (x, y, filled, 11))
             pg.draw.line(self.canvas, (222, 65, 64), (x, y+1), (x+filled-1, y+1), 2)
-            for fraction, length in ((.18, 8), (.51, 13), (.82, 6)):
-                dx = x+int(filled*fraction)
-                pg.draw.line(self.canvas, (128, 16, 24), (dx, y+9), (dx, y+length+9), 2)
-                pg.draw.circle(self.canvas, (156, 24, 30), (dx, y+length+9), 3)
+            # A restrained wet lower edge keeps the health amount easy to read.
+            pg.draw.line(self.canvas, (105, 13, 20), (x, y+10), (x+filled-1, y+10), 2)
 
     def player_status(self, pid, x, y):
         gs = self.gs
@@ -874,6 +872,8 @@ class App:
                 self.effect_selected = value
                 self.review_result = False
             elif kind == 'select':
+                self.notice = None
+                self.notice_queue.clear()
                 self.effect_selected = None
                 self.review_result = False
                 self.selected = value
@@ -1198,6 +1198,7 @@ class App:
         self.gs = GameState()
         self.gs.p1_hand = [7, 4, 6]
         self.gs.p2_hand = [3, 8]
+        self.gs.deck = [n for n in range(1, 12) if n not in self.gs.p1_hand+self.gs.p2_hand]
         self.gs.p1_fingers = 8
         self.gs.round_id = 3
         self.gs.p1_trumps = [('Perfect', 'PERFECT', 0), ('Shield+', 'SHIELD', 2), ('Go 24', 'TARGET', 24), ('Return', 'RETURN', 0), ('Trump+', 'TRUMP_EXCHANGE', 0), ('Add 2', 'ADD', 2)]

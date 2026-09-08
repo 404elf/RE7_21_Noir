@@ -3,6 +3,7 @@ import copy
 import json
 import math
 import os
+import random
 from pathlib import Path
 import tempfile
 import uuid
@@ -63,11 +64,52 @@ class ConfigEditor:
         self.weight_rows.sort(key=lambda row: weights.get(row[0],DEFAULT_WEIGHTS.get(row[0],0)) <= 0)
         self.tab, self.page, self.editing = 'game', 0, None
         self.buffer, self.message, self.replace = '', '', True
+        self.presets = sorted((self.root/'presets').glob('*.json'))
+        self.preset_name = '自定义 / Custom'
+
+    def apply_preset(self, index):
+        """Stage a preset; saving retains the usual validation and verified backup."""
+        path = self.presets[index]
+        source = json.loads(path.read_text(encoding='utf-8-sig'))
+        candidate = copy.deepcopy(self.docs['config.json'])
+        for row in self.weight_rows:
+            candidate['trump_weights'][row[0]]=DEFAULT_WEIGHTS.get(row[0],0)
+        for group in ('game_settings', 'trump_weights'):
+            if not isinstance(source.get(group), dict): raise ValueError('预设格式无效 / Invalid preset')
+            candidate[group].update(source[group])
+        previous, tab = self.docs['config.json'], self.tab
+        try:
+            self.docs['config.json'] = candidate
+            self.tab = 'game'
+            self.validate()
+        except Exception:
+            self.docs['config.json'] = previous
+            raise
+        finally:
+            self.tab = tab
+        self.preset_name = path.stem
+        self.message = '已载入草稿，可继续修改；点击保存生效 / Loaded draft; edit and save to apply'
+
+    def randomize(self):
+        rng = random.Random()
+        rules = self.docs['config.json']['game_settings']
+        # Keep unique 1–11 cards and viable targets; randomise playable settings.
+        rules.update(max_hp=rng.choice((5,10,15,20)), target_score=rng.choice((17,21,24,27)),
+                     deck_range_start=1, deck_range_end=11, initial_trumps_count=rng.randint(2,5),
+                     round_reward_trumps_count=rng.randint(1,3), max_trumps_hand_size=rng.choice((10,15,20)),
+                     max_active_trumps_on_table=10, hit_draw_trump_probability=round(rng.uniform(.15,.55),2),
+                     number_card_draw_probability=round(rng.uniform(.1,.35),2))
+        weights=self.docs['config.json']['trump_weights']
+        for row in self.weight_rows: weights[row[0]]=rng.choice((0,2,4,6,8,10))
+        weights['Perfect']=8
+        self.preset_name='随机 / Random'
+        self.message='已生成随机草稿，可继续修改 / Random draft ready to edit'
 
     def file(self):
-        return 'config.json' if self.tab in ('game','weights') else self.tab+'.json'
+        return 'config.json' if self.tab in ('game','weights','presets') else self.tab+'.json'
 
     def rows(self):
+        if self.tab == 'presets': return []
         if self.tab == 'game': return GAME
         if self.tab == 'timer': return TIMER
         if self.tab == 'audio': return AUDIO
@@ -139,7 +181,25 @@ class ConfigEditor:
         if kind=='save': return self.save()
         self.commit_field()
         self.message=''
-        if kind=='tab': self.tab,self.page=value,0
+        if kind=='preset': self.apply_preset(value)
+        elif kind=='save_preset':
+            self.validate()
+            folder=self.root/'presets';folder.mkdir(exist_ok=True)
+            path=folder/('自定义-'+uuid.uuid4().hex[:8]+'.json')
+            with path.open('x',encoding='utf-8') as stream:
+                json.dump(self.docs['config.json'],stream,ensure_ascii=False,indent=2)
+            self.presets=sorted(folder.glob('*.json'))
+            self.preset_name=path.stem
+            self.message='已保存为独立预设 / Saved as a new preset'
+        elif kind=='quiet_audio':
+            from sound import EVENTS
+            self.docs['audio.json']['events']={name:dict(file='sounds/tactile/'+name+'.wav',enabled=True,volume=1.) for name in EVENTS}
+            self.docs['audio.json'].update(master_volume=.55,result_volume=.55)
+            self.message='新版轻音效已载入草稿，保存后生效 / New sounds staged; save to apply'
+        elif kind=='random': self.randomize()
+        elif kind=='preset_page': self.preset_page=max(0,getattr(self,'preset_page',0)+value)
+        elif kind=='custom': self.preset_name='自定义 / Custom'
+        elif kind=='tab': self.tab,self.page=value,0
         elif kind=='page': self.page=max(0,self.page+value)
         elif kind=='field':
             row=self.rows()[value]
@@ -194,3 +254,29 @@ class ConfigEditor:
         app.text(f'{self.page+1} / {pages}',263,767,18,(165,152,133))
         app.button((354,756,100,48),'›',('cfg','page',1),enabled=self.page+1<pages)
         app.button((892,750,386,58),app.t('保存设置','Save settings'),('cfg','save',None),True)
+        # Presets use their own page so controls never compete with numeric fields.
+        app.button((510,756,350,48),app.t('预设 / 随机 · ','Presets / random · ')+self.preset_name,('cfg','tab','presets'))
+        if self.tab=='audio':
+            app.button((146,608,580,44),app.t('采用新版轻音效（保存后生效）','Use new quiet sounds (save to apply)'),('cfg','quiet_audio',None))
+        if self.tab=='presets':
+            app.panel((125,205,1190,520))
+            app.text(app.t('选择预设后可继续修改；保存才会写入配置。','Choose a starting point, edit freely, then save to apply.'),146,220,19,(229,220,201))
+            # Remove controls hidden by this page, retaining the tabs and close button.
+            app.buttons=[(r,a) for r,a in app.buttons if r.y<200]
+            preset_pages=max(1,(len(self.presets)+5)//6)
+            self.preset_page=min(getattr(self,'preset_page',0),preset_pages-1)
+            for i,path in enumerate(self.presets[self.preset_page*6:self.preset_page*6+6]):
+                app.button((146+(i%3)*383,270+(i//3)*70,365,52),path.stem,('cfg','preset',self.preset_page*6+i))
+            y=420
+            app.button((146,y,365,52),app.t('一键随机','Randomise'),('cfg','random',None))
+            app.button((529,y,365,52),app.t('自定义（保留当前草稿）','Custom: keep current draft'),('cfg','custom',None))
+            app.button((912,y,365,52),app.t('保存为新预设','Save new preset'),('cfg','save_preset',None))
+            app.button((146,495,160,44),'‹',('cfg','preset_page',-1),enabled=self.preset_page>0)
+            app.text(f'{self.preset_page+1} / {preset_pages}',335,505,18,(229,220,201))
+            app.button((425,495,160,44),'›',('cfg','preset_page',1),enabled=self.preset_page+1<preset_pages)
+            app.text(self.message,146,625,18,(232,104,83),width=1120)
+            app.text(app.t('当前草稿：','Current draft: ')+self.preset_name,146,565,20,(229,220,201))
+            app.button((146,680,365,48),app.t('继续编辑对局规则','Edit rules'),('cfg','tab','game'))
+            app.button((529,680,365,48),app.t('继续编辑王牌权重','Edit weights'),('cfg','tab','weights'))
+            app.panel((125,738,1190, 80))
+            app.button((892,750,386,58),app.t('保存并应用设置','Save and apply settings'),('cfg','save',None),True)

@@ -1,7 +1,11 @@
 @echo off
 cd /d "%~dp0"
-if exist "dist\v1.3.8\RE7_21_Noir\RE7_21_Noir.exe" (
-    start "" "dist\v1.3.8\RE7_21_Noir\RE7_21_Noir.exe"
+if exist "dist\v1.3.9-final\RE7_21_Noir\RE7_21_Noir.exe" (
+    start "" "dist\v1.3.9-final\RE7_21_Noir\RE7_21_Noir.exe"
+    exit /b
+)
+if exist "dist\v1.3.9\RE7_21_Noir\RE7_21_Noir.exe" (
+    start "" "dist\v1.3.9\RE7_21_Noir\RE7_21_Noir.exe"
     exit /b
 )
 if not exist ".venv\Scripts\python.exe" (
