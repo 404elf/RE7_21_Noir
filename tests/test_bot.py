@@ -31,7 +31,7 @@ class FairStrategy(unittest.TestCase):
         gs = sample()
         before = observe(gs)
         gs.p1_hand[0] = 11
-        gs.p1_trumps = [('Escape', 'ESCAPE', 0)]*12
+        gs.p1_trumps = [('Escape', 'ESCAPE', 0)]*len(gs.p1_trumps)
         gs.deck = list(reversed(gs.deck))
         after = observe(gs)
         self.assertEqual(before, after)
@@ -128,7 +128,7 @@ class SoloInterface(unittest.TestCase):
                         app.render()
                         self.assertEqual(app.difficulty, difficulty)
                         self.assertEqual(app.style, style)
-                        self.assertEqual(sum(isinstance(action, tuple) for _, action in app.buttons), 6)
+                        self.assertEqual(sum(isinstance(action, tuple) for _, action in app.buttons), len(DIFFICULTIES)+len(STYLES))
             app.preview()
             app.solo = True
             app.action('leave')

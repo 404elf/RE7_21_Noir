@@ -9,6 +9,7 @@ VERSION=2
 MAX_FRAME=262144
 FIELDS=set('deck p1_hand p2_hand p1_trumps p2_trumps active_trumps max_hp_limit p1_fingers p2_fingers target_score round_starter turn phase round_id round_winner round_damage result_timer p1_stop p2_stop p1_req_rematch p2_req_rematch last_action_time is_escape_end INSTANT_TYPES last_result end_reason draw_offer blood_loss enabled_cards clock_config clock_remaining clock_active action_log match_id network_paused'.split())
 REQUIRED=set('deck p1_hand p2_hand p1_trumps p2_trumps active_trumps max_hp_limit p1_fingers p2_fingers target_score round_starter turn phase round_id round_winner round_damage result_timer p1_stop p2_stop p1_req_rematch p2_req_rematch last_action_time is_escape_end INSTANT_TYPES'.split())
+FIELDS.add('opening_cards')
 
 def bounded(value, depth=0, budget=None):
     if budget is None: budget=[20000]
@@ -85,6 +86,20 @@ def state_from(data):
         if event['event']=='trump' and not isinstance(event.get('card'),str): raise ValueError('log_card')
         if event['event']=='result' and (not isinstance(event.get('totals'),list) or len(event['totals'])!=2 or any(type(n) is not int for n in event['totals']) or type(event.get('damage')) is not int): raise ValueError('log_result')
         if 'drawn' in event and (not isinstance(event['drawn'],list) or any(type(n) is not int for n in event['drawn'])): raise ValueError('log_draw')
+        for key in ('hands','before','after'):
+            if key in event:
+                hands=event[key]
+                if not isinstance(hands,list) or len(hands)!=2 or any(not isinstance(h,list) or len(h)>100 or any(type(n) is not int or not 1<=n<=100 for n in h) for h in hands): raise ValueError('log_hands')
+        for key in ('target','target_before','value'):
+            if key in event and type(event[key]) is not int: raise ValueError('log_number')
+        if 'kind' in event and not isinstance(event['kind'],str): raise ValueError('log_kind')
+        if 'locked' in event and type(event['locked']) is not bool: raise ValueError('log_lock')
+        if 'opening' in event:
+            h=event['opening']
+            if not isinstance(h,list) or len(h)!=2 or any(not isinstance(a,list) or not a or a[0] is not None or any(type(n) is not int or not 1<=n<=100 for n in a[1:]) for a in h): raise ValueError('log_opening')
+    if 'opening_cards' in data:
+        opening=data['opening_cards']
+        if not isinstance(opening,dict) or any(not k.isdigit() or not isinstance(v,list) or len(v)!=2 or any(type(n) is not int or not 1<=n<=100 for n in v) for k,v in opening.items()): raise ValueError('private_opening')
     # __new__ of our local known class; only allowlisted data fields are installed.
     state=object.__new__(GameState)
     state.__dict__.update(data)

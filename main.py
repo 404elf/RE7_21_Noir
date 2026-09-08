@@ -349,12 +349,14 @@ class App:
         self.text(self.t('选择实力，再选择性格。每一位对手，都有自己的节奏。', 'Choose their skill. Choose their character. Find your next rival.'), 182, 186, 20, MUTED)
         self.text(self.t('01 / 难度', '01 / DIFFICULTY'), 183, 246, 17, GOLD)
         for i, (key, values) in enumerate(DIFFICULTIES.items()):
-            rect = pg.Rect(180+i*370, 284, 340, 151)
+            rect = pg.Rect(180+i*278, 284, 258, 151)
             self.panel(rect, PANEL, GOLD if self.difficulty == key else LINE)
             self.text(self.t(values[0], values[1]), rect.x+24, rect.y+21, 25, INK, True)
-            self.wrap(self.t(values[2], values[3]), pg.Rect(rect.x+24, rect.y+71, 292, 63), 17)
+            self.wrap(self.t(values[2], values[3]), pg.Rect(rect.x+24, rect.y+71, 212, 73), 16)
             self.buttons.append((rect, ('difficulty', key)))
         self.text(self.t('02 / 打法风格', '02 / PLAY STYLE'), 183, 470, 17, GOLD)
+        if self.difficulty == 'nightmare':
+            self.text(self.t('极难模式自主调整策略，忽略下方风格选择。', 'Nightmare adapts freely; the style selection below is ignored.'), 445, 470, 16, RED)
         for i, (key, values) in enumerate(STYLES.items()):
             rect = pg.Rect(180+i*370, 508, 340, 162)
             self.panel(rect, PANEL, GOLD if self.style == key else LINE)
@@ -441,7 +443,7 @@ class App:
             mood = ''
             if self.style == 'swing' and self.bot_mood:
                 mood = ' / '+STYLES[self.bot_mood][0 if self.zh else 1]
-            self.text(f'AI · {difficulty} · {style}{mood}', 230, 112, 16, GOLD, width=565)
+            self.text(f'AI · {difficulty}'+(self.t(' · 自适应猎杀',' · Adaptive') if self.difficulty=='nightmare' else f' · {style}{mood}'), 230, 112, 16, GOLD, width=565)
         turn = self.t('你的行动', 'YOUR TURN') if gs.turn == self.pid else self.t('对手行动中', 'OPPONENT’S TURN')
         if gs.phase != 'ACTION':
             turn = self.t('本局结算', 'ROUND RESULT')
@@ -652,14 +654,25 @@ class App:
         self.buttons = [b for b in self.buttons if b[1] in ('book', 'language', 'audio_toggle', 'history', 'match_options')]
         self.panel((1034, 326, 374, 520))
         title = 'DRAW' if not gs.round_winner else 'YOU WIN' if gs.round_winner == self.pid else 'YOU LOSE'
+        if self.solo and self.difficulty=='nightmare' and gs.phase=='GAMEOVER' and gs.round_winner:
+            title = 'YOU SURVIVED' if gs.round_winner==self.pid else 'YOU DIED'
         color = GOLD if gs.round_winner == self.pid else RED if gs.round_winner else INK
-        stamp = self.font(68, True).render(title, True, color)
+        stamp = self.font(62 if title=='YOU SURVIVED' else 68, True).render(title, True, color)
         self.canvas.blit(stamp, stamp.get_rect(center=(522, 366)))
+        if self.solo and self.difficulty == 'nightmare' and gs.phase == 'GAMEOVER' and gs.round_winner:
+            won = gs.round_winner == self.pid
+            # An engraved end card in the sidebar leaves both revealed hands clear.
+            self.panel((1048, 340, 345, 320), (27, 17, 15), GOLD if won else RED)
+            self.text('EXECUTIONER', 1070, 365, 21, MUTED, True)
+            self.text(self.t('处刑者已倒下', 'SLAYER') if won else self.t('你已被处决', 'EXECUTED'), 1070, 412, 34, GOLD if won else RED, True, 305)
+            pg.draw.line(self.canvas,GOLD if won else RED,(1070,474),(1371,474),2)
+            self.wrap(self.t('你击败了极难对手。\n这一次，活着离开牌桌。','You defeated the Nightmare.\nThis time, you leave alive.') if won else self.t('你的筹码，已经耗尽。\n处刑者等待下一位挑战者。','Your stake is spent.\nThe Executioner awaits the next challenger.'),pg.Rect(1070,505,300,115),20,INK)
         reason = getattr(gs, 'end_reason', '')
-        if reason:
+        special_end = self.solo and self.difficulty == 'nightmare' and gs.phase == 'GAMEOVER' and gs.round_winner
+        if reason and not special_end:
             label = {'surrender': ('投降结束', 'SURRENDER'), 'agreement': ('双方同意平局', 'DRAW AGREED'), 'timeout': ('总时间耗尽', 'TIME FORFEIT')}.get(reason, ('', ''))
             self.text(self.t(*label), 1056, 362, 24, GOLD, True, 326)
-        elif gs.round_damage:
+        elif gs.round_damage and not special_end:
             self.text(self.t('本局扣血', 'ROUND DAMAGE'), 1056, 355, 17, MUTED)
             self.text(f'-{gs.round_damage}', 1056, 387, 72, RED, True)
             loser = 3-gs.round_winner
@@ -777,7 +790,7 @@ class App:
             elif event == 'state':
                 self.net_status=self.t('对手掉线，等待重连（最多 30 秒）','Opponent disconnected; waiting up to 30s') if getattr(value,'network_paused',False) else ''
                 self.observe_notices(value)
-                self.history.ingest(value)
+                self.history.ingest(value, self.pid)
                 sound_events.extend(self.sound_tracker.update(value, self.pid))
                 latest = value
             elif event == 'mood':
@@ -1067,7 +1080,7 @@ class App:
             entries = list(reversed(self.history.entries))
             pages = max(1, (len(entries)+11)//12)
             self.log_page = min(self.log_page, pages-1)
-            self.text(self.t('最近动作在前 · 只包含公开信息 · 查看日志不暂停计时', 'Newest first · Public information only · The clock keeps running'), 136, 143, 18, MUTED)
+            self.text(self.t('最近动作在前 · 你的底牌可见，对方未亮首牌为 ? · 查看日志不暂停计时', 'Newest first · Your opening card is visible; unrevealed opponent card is ? · Clock keeps running'), 136, 143, 17, MUTED)
             for i, entry in enumerate(entries[self.log_page*12:self.log_page*12+12]):
                 y = 191+i*40
                 self.text(f'R{entry["round"]:02}', 138, y, 16, GOLD)

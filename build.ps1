@@ -1,4 +1,4 @@
-param([string]$OutputRoot = 'dist/v1.4.0')
+param([string]$OutputRoot = 'dist/v1.4.1')
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $packageRoot = Join-Path $OutputRoot 'RE7_21_Noir'
@@ -25,4 +25,8 @@ foreach ($name in @('timer.json', 'updates.json', 'version.json')) {
 }
 foreach ($name in @('network.json','room-server.json','start-room-server.cmd','NETWORKING.md','SECURITY.md')) {
     Copy-Item -LiteralPath $name -Destination (Join-Path $packageRoot $name)
+}
+New-Item -ItemType Directory -Path (Join-Path $packageRoot 'docs') | Out-Null
+foreach ($name in @('AI-v1.4.1.md','ai-v141-calibrated-benchmark.jsonl')) {
+    Copy-Item -LiteralPath (Join-Path 'docs' $name) -Destination (Join-Path $packageRoot "docs/$name")
 }

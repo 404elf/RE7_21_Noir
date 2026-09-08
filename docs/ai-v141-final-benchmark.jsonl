@@ -1,0 +1,5 @@
+pygame-ce 2.5.8 (SDL 2.32.10, Python 3.12.10)
+{"games": 20, "left": "hard", "right": "hard", "style": "conservative", "wins": 9, "losses": 11, "draws": 0, "unfinished": 0, "invalid": 0, "decisions": 2366, "max_decision_ms": 25.21}
+{"games": 20, "left": "hard", "right": "hard", "style": "gambler", "wins": 9, "losses": 11, "draws": 0, "unfinished": 0, "invalid": 0, "decisions": 2383, "max_decision_ms": 26.74}
+{"games": 20, "left": "hard", "right": "hard", "style": "swing", "wins": 6, "losses": 14, "draws": 0, "unfinished": 0, "invalid": 0, "decisions": 2508, "max_decision_ms": 19.65}
+{"games": 20, "left": "nightmare", "right": "hard", "style": "conservative", "wins": 15, "losses": 5, "draws": 0, "unfinished": 0, "invalid": 0, "decisions": 2061, "max_decision_ms": 201.59}

@@ -9,8 +9,9 @@ import re7_21 as engine
 
 DIFFICULTIES = {
     'easy': ('入门', 'Easy', '偶尔误判，简单使用王牌。', 'Occasional mistakes and simple trump play.'),
-    'normal': ('标准', 'Normal', '估算爆牌风险，寻找实用组合。', 'Estimates bust risk and uses useful trumps.'),
+    'normal': ('标准', 'Normal', '估算爆牌风险，使用实用组合。', 'Estimates bust risk and uses useful trumps.'),
     'hard': ('困难', 'Hard', '比较行动收益，结合明牌与生命决策。', 'Compares outcomes using visible cards and health.'),
+    'nightmare': ('极难 · 处刑者', 'Nightmare', '推测底牌、保留连招、预判反制。只为赢。', 'Infers hidden cards, plans combos and counters.'),
 }
 STYLES = {
     'gambler': ('赌徒', 'Gambler', '追求高点数，愿意冒险翻盘。', 'Chases high totals and risky comebacks.'),
@@ -39,6 +40,10 @@ class Observation:
     incoming: int = 1
     outgoing: int = 1
     enemy_effects: tuple = ()
+    table: tuple = ()
+    opponent_count: int = 0
+    round_key: tuple = ()
+    events: tuple = ()
 
 
 def observe(state, pid=2):
@@ -61,6 +66,14 @@ def observe(state, pid=2):
         max(0, 1+sum(t['val'] for t in table if t['owner']==opponent and t['type'] in ('ADD','RETURN_PLUS','PERFECT_PLUS','DEATH_DESTROY'))-sum(t['val'] for t in table if t['owner']==pid and t['type']=='SHIELD')),
         max(0, 1+sum(t['val'] for t in table if t['owner']==pid and t['type'] in ('ADD','RETURN_PLUS','PERFECT_PLUS','DEATH_DESTROY'))-sum(t['val'] for t in table if t['owner']==opponent and t['type']=='SHIELD')),
         tuple((t['type'], t['val']) for t in table if t['owner'] == opponent),
+        tuple((1 if t['owner']==pid else 2,t['name'],t['type'],t['val'],t.get('counter',0)) for t in table),
+        len(getattr(state, f'p{opponent}_trumps')),
+        (getattr(state,'match_id',''), state.round_id),
+        tuple((e['id'],1 if e['pid']==pid else 2,e['event'],e.get('kind',''),e.get('value',0),
+               tuple(e.get('before',[[],[]])[pid-1]),tuple(e.get('before',[[],[]])[opponent-1]),
+               tuple(e.get('after',[[],[]])[pid-1]),tuple(e.get('after',[[],[]])[opponent-1]),
+               e.get('target_before',state.target_score),e.get('locked',False))
+              for e in getattr(state,'action_log',[]) if e['round']==state.round_id and e['event'] in ('trump','stay','hit')),
     )
 
 
@@ -73,6 +86,7 @@ class Strategy:
         self.rng = random.Random(seed)
         self.mood = self.rng.choice(('gambler', 'conservative')) if style == 'swing' else style
         self.remaining = self.rng.randint(2, 4)
+        self.planner = None
 
     def unknown(self, view):
         known = set(view.hand + view.opponent_visible)
@@ -140,7 +154,7 @@ class Strategy:
             return .08 + .35*win*min(value, max(0, view.opponent_hp-view.outgoing))
         if kind == 'SHIELD':
             return .5*(1-win)*min(value, view.incoming, view.hp)
-        if kind in ('DESTROY_SINGLE', 'DESTROY_ALL', 'DESTROY_BLOCK'):
+        if kind in ('DESTROY_SINGLE', 'DESTROY', 'DESTROY_BLOCK'):
             harmful = sum(k in ('ADD','SHIELD','GAMBLE','SILENCE','DESIRE','DESIRE_PLUS','PERFECT_PLUS','RETURN_PLUS') for k,v in view.enemy_effects)
             return .24*min(harmful, 1 if kind == 'DESTROY_SINGLE' else harmful)
         if kind == 'SILENCE':
@@ -212,6 +226,11 @@ class Strategy:
             self.mood = 'conservative' if self.mood == 'gambler' else 'gambler'
             self.remaining = self.rng.randint(2, 4)
         self.remaining = max(0, self.remaining-1)
+        if self.difficulty in ('hard','nightmare'):
+            if self.planner is None:
+                from tactics import Planner
+                self.planner = Planner(self.rng, self.difficulty == 'nightmare')
+            return self.planner.choose(view, extra_actions, self.mood)
         pool = self.unknown(view)
         total = sum(view.hand)
         max_extra = {'easy': 1, 'normal': 2, 'hard': 4}[self.difficulty]
@@ -322,7 +341,7 @@ class BotSession:
                     raise ConnectionError('Bot send failed')
                 if command.startswith(('TRUMP:', 'DISCARD:')):
                     extra += 1
-                ready_at = now+{'easy': 1.25, 'normal': 1., 'hard': .8}[self.strategy.difficulty]
+                ready_at = time.monotonic()+{'easy': 1.25, 'normal': 1., 'hard': .8, 'nightmare': .65}[self.strategy.difficulty]
         except (OSError, ConnectionError):
             if not self.stop.is_set():
                 self.on_error()

@@ -52,6 +52,11 @@ class Match:
         self.publish()
 
     def record(self, event, pid=0, **details):
+        if event == 'round_start':
+            openings = dict(getattr(self.gs,'opening_cards',{}))
+            openings[str(self.gs.round_id)] = [self.gs.p1_hand[0],self.gs.p2_hand[0]]
+            self.gs.opening_cards = dict(list(openings.items())[-80:])
+            details.update(opening=[[None]+list(self.gs.p1_hand[1:]),[None]+list(self.gs.p2_hand[1:])], target=self.gs.target_score)
         self.sequence += 1
         self.log.append(dict(id=self.sequence, round=self.gs.round_id, event=event, pid=pid, **details))
         self.log = self.log[-300:]
@@ -81,7 +86,9 @@ class Match:
         self.gs.draw_offer = 0
         self.gs.last_result = dict(round=self.gs.round_id, hands=[list(self.gs.p1_hand), list(self.gs.p2_hand)], target=self.gs.target_score, winner=self.gs.round_winner, damage=self.gs.round_damage, escape=self.gs.is_escape_end)
         self.record('result', winner=self.gs.round_winner, damage=self.gs.round_damage,
-                    totals=[sum(self.gs.p1_hand), sum(self.gs.p2_hand)])
+                    totals=[sum(self.gs.p1_hand), sum(self.gs.p2_hand)],
+                    hands=[list(self.gs.p1_hand), list(self.gs.p2_hand)], target=self.gs.target_score,
+                    hp=[max(0,self.gs.p1_fingers), max(0,self.gs.p2_fingers)])
 
     def tick(self):
         now = self.monotonic()
@@ -151,7 +158,9 @@ class Match:
                 setattr(gs, f'p{pid}_req_rematch', True)
                 self.record('rematch', pid)
             if gs.p1_req_rematch and gs.p2_req_rematch:
+                gs.round_id = 0
                 gs.full_reset()
+                gs.last_action_time = {1: 0., 2: 0.}
                 self.blood_loss = {1: 0, 2: 0}
                 self.last_hp = {1: gs.p1_fingers, 2: gs.p2_fingers}
                 gs.end_reason = ''
@@ -159,6 +168,7 @@ class Match:
                 gs.draw_offer = 0
                 self.draw_offered_round = {}
                 self.log = []
+                gs.opening_cards = {}
                 self.match_id = uuid.uuid4().hex
                 self.reset_clock()
                 self.last = self.monotonic()
@@ -232,8 +242,13 @@ class Match:
                 if card[1] not in ('SHIELD_ATTACK', 'SHIELD_ATTACK_PLUS', 'OBLIVION') and not (card[1] == 'TARGET' and any(t['type'] == 'TARGET' for t in own)):
                     return False
             old_round = gs.round_id
-            self.record('trump', pid, card=card[0])
+            before = [list(gs.p1_hand[1:]), list(gs.p2_hand[1:])]
+            target_before = gs.target_score
+            locked = any(t['owner'] == opponent and t['type'] in ('GAMBLE','SILENCE') for t in gs.active_trumps)
             gs.use_trump(pid, index)
+            self.record('trump', pid, card=card[0], kind=card[1], value=card[2],
+                        before=before, after=[list(gs.p1_hand[1:]), list(gs.p2_hand[1:])],
+                        target_before=target_before, target=gs.target_score, locked=locked)
             if any(t['owner'] == pid and t['type'] == 'HARVEST' for t in gs.active_trumps):
                 gs.give_trump(pid, 1)
             setattr(gs, f'p{opponent}_stop', False)
