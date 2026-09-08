@@ -7,6 +7,7 @@ functions are rebound to private globals so planning cannot consume game RNG.
 import math
 import random
 import types
+from functools import lru_cache
 
 import re7_21 as engine
 
@@ -99,7 +100,7 @@ class Planner:
         pool=tuple(n for n in v.numbers if n not in v.hand+v.opponent_visible)
         if self.key!=v.round_key:
             self.key=v.round_key;self.seen=set();self.belief={n:1. for n in v.numbers}
-        if self.nightmare:
+        if v.events:
             for event in v.events:
                 eid,actor,action,kind,val,own,opp,after_own,after_opp,target,locked=event
                 if eid in self.seen: continue
@@ -119,16 +120,60 @@ class Planner:
                             drawn=len(after)>len(before)
                             likelihood=1. if drawn==(val in available) else .005
                     # Actions are noisy signals, not proof: never eliminate a bluff.
-                    if actor==2 and action=='stay':
+                    if self.nightmare and actor==2 and action=='stay':
                         likelihood*=.45 if sum(v.opponent_visible)+hidden<target*.68 else 1.15
-                    if actor==2 and kind in ('ADD','GAMBLE','ADD_21'):
+                    if self.nightmare and actor==2 and kind in ('ADD','GAMBLE','ADD_21'):
                         likelihood*=1.25 if total>=target*.8 and total<=target else .8
-                    if actor==2 and kind=='SHIELD':
+                    if self.nightmare and actor==2 and kind=='SHIELD':
                         likelihood*=1.1 if total<target*.85 else .95
                     self.belief[hidden]*=likelihood
         weights={n:max(1e-12,self.belief.get(n,1.)) for n in pool}
         normal=sum(weights.values()) or 1
         return {n:w/normal for n,w in weights.items()}
+
+    def draw_values(self,v,belief):
+        """Stay versus drawing with further chances to recover, using public beliefs.
+
+        The next-card distribution excludes the hypothesized hidden card. After
+        every draw, all remaining hidden hypotheses share the same next decision;
+        this does not choose a different action with knowledge of each secret.
+        Opponent trumps are evaluated elsewhere; this is the number-card baseline.
+        """
+        pool=tuple(belief)
+        visible=sum(v.opponent_visible)
+        def result(total,other):
+            if total>v.target and other>v.target: return (other>total)-(other<total)
+            if total>v.target:return -1
+            if other>v.target:return 1
+            return (total>other)-(total<other)
+        @lru_cache(None)
+        def evaluate(remaining,total,depth):
+            normal=sum(belief[n] for n in remaining)
+            if normal<=0:return (0.,0.)
+            stay=sum(belief[n]*result(total,visible+n) for n in remaining)/normal
+            if total>v.target or len(remaining)<=1 or depth<=0:return (stay,stay)
+            draw=0.
+            for n in remaining:
+                probability=(1-belief[n]/normal)/(len(remaining)-1)
+                if probability<=1e-12:continue
+                rest=tuple(x for x in remaining if x!=n)
+                future=evaluate(rest,total+n,depth-1)
+                draw+=probability*max(future)
+            return stay,draw
+        return evaluate(pool,sum(v.hand),min(5,len(pool)-1) if len(pool)<=12 else 1)
+
+    @staticmethod
+    def ready_to_raise(states):
+        """A lead requiring a future random draw is not a reason to raise now."""
+        stable=0.
+        for gs,w in states:
+            own,other=sum(gs.p1_hand),sum(gs.p2_hand)
+            winning=own<=gs.target_score and (own>other or other>gs.target_score)
+            locked=any(t['owner']==1 and t['type'] in ('GAMBLE','SILENCE') for t in gs.active_trumps)
+            # Playing a trump clears the opponent's stop flag in this game.
+            # A low stopped opponent can therefore resume drawing after our ADD.
+            if winning and (locked or not gs.deck or other>gs.target_score or own>=gs.target_score-2):stable+=w
+        return stable>=.95
 
     def worlds(self,v):
         belief=self.infer(v)
@@ -231,12 +276,23 @@ class Planner:
             if len(shields)>2 and sum(v.hand)>=sum(v.opponent_visible)+max(self.infer(v),default=0):
                 return f'DISCARD:{shields[0]}'
         baseline=self.expected(worlds)
+        belief=self.infer(v)
+        stay_value,draw_value=self.draw_values(v,belief)
         if extra<max_extra and not v.trump_locked and not v.table_full:
             guaranteed = sum(w for gs,w in worlds if sum(gs.p1_hand)<=gs.target_score and (sum(gs.p1_hand)>sum(gs.p2_hand) or sum(gs.p2_hand)>gs.target_score))
             for i,c in enumerate(v.trumps):
-                if c[1]=='ADD' and guaranteed>=.95 and v.outgoing<v.opponent_hp: return f'TRUMP:{i}'
+                if c[1]=='ADD' and self.ready_to_raise(worlds) and v.outgoing<v.opponent_hp: return f'TRUMP:{i}'
                 if c[1]=='SHIELD' and v.hp<=v.incoming and guaranteed<.5: return f'TRUMP:{i}'
-        belief=self.infer(v)
+            for i,c in enumerate(v.trumps):
+                if c[1] in ('DRAW_SPEC','DRAW_SPEC_PLUS') and not v.draw_locked and v.deck_count and c[2] in belief and sum(v.hand)+c[2]==v.target and belief[c[2]]<.35 and guaranteed<.7:
+                    self.last_plan=(('TRUMP',c),('STAY',None))
+                    return f'TRUMP:{i}'
+        # Safe low-total draws preserve targeted/target-changing trumps for when
+        # the extra information makes them useful. Emergency protection above
+        # remains possible when handing over exposes lethal damage.
+        if not v.draw_locked and v.deck_count and belief and sum(v.hand)+max(belief)<=v.target and sum(v.hand)<v.target*.75 and stay_value<.8:
+            self.last_plan=(('HIT',None),)
+            return 'HIT'
         def information(path):
             if not self.nightmare: return 0.
             bonus=0.
@@ -266,6 +322,8 @@ class Planner:
                 common=set(states[0][0].p1_trumps)
                 for gs,w in states[1:]: common.intersection_update(gs.p1_trumps)
                 for card in sorted(common):
+                    if card[1] in ('ADD','ADD_21','GAMBLE') and not self.ready_to_raise(states):continue
+                    if card[1]=='TARGET' and card[2]==states[0][0].target_score:continue
                     actions=[('TRUMP',card)]
                     if len(states[0][0].p1_trumps)>=v.max_trumps or any(k in ('DESIRE','DESIRE_PLUS') for k,val in v.enemy_effects):
                         actions.append(('DISCARD',card))
@@ -287,11 +345,29 @@ class Planner:
                 if path[0] in firsts: continue
                 frontier.append((states,path));firsts.add(path[0])
                 if len(frontier)>=width: break
+        # A setup card must not be spent solely to justify a subsequent blind
+        # draw. Keep legitimate target rescue and exact-number finishing plays.
+        filtered=[]
+        for value,path in terminal:
+            first,card=path[0]
+            if first=='TRUMP' and path[-1][0]=='HIT':
+                if card[1] in ('ADD','ADD_21','GAMBLE'):continue
+                if card[1]=='TARGET' and sum(v.hand)<=v.target:continue
+                if card[1]=='RETURN' and sum(v.hand)<=v.target:continue
+                if card[1] in ('DRAW_SPEC','DRAW_SPEC_PLUS') and sum(v.hand)+max(belief,default=0)<=v.target:continue
+            filtered.append((value,path))
+        terminal=filtered
         value,path=max(terminal,key=lambda item:item[0])
         self.last_plan=path
         action,card=path[0]
         if action in ('TRUMP','DISCARD'): return f'{action}:{v.trumps.index(card)}'
-        if not self.nightmare and mood=='gambler' and action=='STAY' and not v.opponent_stopped and not v.draw_locked and v.deck_count and sum(v.hand)<v.target:
+        # In particular, after Return or a failed number probe, do not accept a
+        # likely loss merely because one draw alone may still leave us behind.
+        if action=='STAY' and not v.draw_locked and v.deck_count and sum(v.hand)<=v.target and stay_value<0 and draw_value>stay_value+.03:
+            self.last_plan=(('HIT',None),)
+            return 'HIT'
+        raised=any(owner==1 and kind in ('ADD','ADD_21','GAMBLE') for owner,name,kind,value,counter in v.table)
+        if not self.nightmare and mood=='gambler' and action=='STAY' and not (raised and stay_value>=0) and not v.opponent_stopped and not v.draw_locked and v.deck_count and sum(v.hand)<v.target:
             pool=tuple(self.infer(v))
             if pool and sum(sum(v.hand)+n>v.target for n in pool)/len(pool)<=.75 and self.rng.random()<.32:
                 return 'HIT'

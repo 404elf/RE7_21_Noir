@@ -41,13 +41,21 @@ def run(games=20,left='nightmare',right='hard',style='swing',rival=Strategy):
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--games',type=int,default=20)
     parser.add_argument('--previous',type=Path,help='Verified source archive containing the previous bot.py')
+    parser.add_argument('--only-previous',action='store_true',help='Compare both updated difficulties to their previous implementations')
     args=parser.parse_args()
     if args.previous:
         import types,zipfile
         previous=types.ModuleType('previous_bot');sys.modules[previous.__name__]=previous
         with zipfile.ZipFile(args.previous) as archive:
-            exec(compile(archive.read('bot.py'),'previous_bot.py','exec'),previous.__dict__)
+            source=archive.read('bot.py').decode('utf-8')
+            if 'tactics.py' in archive.namelist():
+                tactics=types.ModuleType('previous_tactics');sys.modules[tactics.__name__]=tactics
+                exec(compile(archive.read('tactics.py'),'previous_tactics.py','exec'),tactics.__dict__)
+                source=source.replace('from tactics import Planner','from previous_tactics import Planner')
+            exec(compile(source,'previous_bot.py','exec'),previous.__dict__)
+        for difficulty in (('hard','nightmare') if args.only_previous else ('hard',)):
+            for style in (('swing',) if difficulty=='nightmare' else ('conservative','gambler','swing')):
+                print(json.dumps(run(args.games,left=difficulty,right=difficulty,style=style,rival=previous.Strategy)),flush=True)
+    if not args.only_previous:
         for style in ('conservative','gambler','swing'):
-            print(json.dumps(run(args.games,left='hard',style=style,rival=previous.Strategy)),flush=True)
-    for style in ('conservative','gambler','swing'):
-        print(json.dumps(run(args.games,style=style)),flush=True)
+            print(json.dumps(run(args.games,style=style)),flush=True)
