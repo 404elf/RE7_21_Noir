@@ -1,0 +1,2 @@
+{"games": 24, "left": "nightmare", "right": "nightmare", "style": "swing", "wins": 12, "losses": 12, "draws": 0, "unfinished": 0, "invalid": 0, "decisions": 4185, "max_decision_ms": 529.48, "baseline": "probe_only"}
+{"games": 24, "left": "nightmare", "right": "nightmare", "style": "swing", "wins": 12, "losses": 12, "draws": 0, "unfinished": 0, "invalid": 0, "decisions": 4185, "max_decision_ms": 353.93, "baseline": "v143"}

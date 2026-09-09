@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import uuid
 import pygame as pg
-from cards import CARDS, info
+from cards import CARDS, info, english_name
 from presentation_rules import DEFAULT_WEIGHTS, NUMBER_NAMES
 from match import DEFAULT_TIMER
 
@@ -133,7 +133,7 @@ class ConfigEditor:
         self.editing = None
 
     def validate(self):
-        groups = [('game', GAME), ('weights', self.rows() if self.tab == 'weights' else [('Return+' if name == 'ADD2+' else name, info(name)[0],name,0,10000,1,False) for name in CARDS if name not in NUMBER_NAMES])] if self.file() == 'config.json' else [(self.tab,self.rows())]
+        groups = [('game', GAME), ('weights', self.rows() if self.tab == 'weights' else [('Return+' if name == 'ADD2+' else name, info(name)[0],english_name(name),0,10000,1,False) for name in CARDS if name not in NUMBER_NAMES])] if self.file() == 'config.json' else [(self.tab,self.rows())]
         for group, rows in groups:
             for row in rows:
                 values = self.docs['config.json']['game_settings' if group == 'game' else 'trump_weights'] if group in ('game','weights') else self.docs[self.file()]

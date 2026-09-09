@@ -1,0 +1,16 @@
+{
+  "games": 12,
+  "left": "nightmare",
+  "right": "nightmare",
+  "style": "swing",
+  "wins": 4,
+  "losses": 8,
+  "draws": 0,
+  "unfinished": 0,
+  "invalid": 0,
+  "decisions": 1738,
+  "max_decision_ms": 571.61,
+  "seed_offset": 100,
+  "probes": 0,
+  "returns": 0
+}

@@ -3,7 +3,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import uuid
-from cards import info
+from cards import info, english_name
 
 
 class History:
@@ -58,7 +58,7 @@ def describe(entry, zh=True):
     if event == 'hit' and entry.get('drawn'):
         return player+(' 抽到 ' if zh else ' draws ')+', '.join(map(str, entry['drawn']))
     if event == 'trump':
-        name = info(entry['card'])[0] if zh else entry['card']
+        name = info(entry['card'])[0] if zh else english_name(entry['card'])
         text = f'{player} '+('使用 ' if zh else 'plays ')+name
         if 'before' in entry and entry.get('before') != entry.get('after'):
             text += (' · 明牌 ' if zh else ' · Face up ')+hands_text(entry['before'])+' → '+hands_text(entry['after'])

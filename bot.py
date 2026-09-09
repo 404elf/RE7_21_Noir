@@ -8,15 +8,15 @@ import time
 import re7_21 as engine
 
 DIFFICULTIES = {
-    'easy': ('入门', 'Easy', '偶尔误判，简单使用王牌。', 'Occasional mistakes and simple trump play.'),
-    'normal': ('标准', 'Normal', '估算爆牌风险，使用实用组合。', 'Estimates bust risk and uses useful trumps.'),
-    'hard': ('困难', 'Hard', '比较行动收益，结合明牌与生命决策。', 'Compares outcomes using visible cards and health.'),
-    'nightmare': ('极难 · 处刑者', 'Nightmare', '推测底牌、保留连招、预判反制。只为赢。', 'Infers hidden cards, plans combos and counters.'),
+    'easy': ('入门', 'Easy', '熟悉规则，从这里开始。', 'Learn the rules here.'),
+    'normal': ('标准', 'Normal', '一场普通的较量。', 'A regular game of 21.'),
+    'hard': ('困难', 'Hard', '别急着把好牌用光。', 'Keep a few good cards in reserve.'),
+    'nightmare': ('极难', 'Nightmare', '每一步都可能要了你的命。', 'Every move could be your last.'),
 }
 STYLES = {
     'gambler': ('赌徒', 'Gambler', '追求高点数，愿意冒险翻盘。', 'Chases high totals and risky comebacks.'),
     'conservative': ('保守', 'Cautious', '优先保命，倾向提前停牌。', 'Protects health and tends to stay early.'),
-    'swing': ('摇摆型', 'Wildcard', '每隔 2–4 次决策，在冒险与稳健间切换。', 'Switches between bold and cautious every 2–4 decisions.'),
+    'swing': ('摇摆型', 'Wildcard', '有时惜命，有时不要命。', 'Sometimes cautious. Sometimes reckless.'),
 }
 
 

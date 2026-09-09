@@ -10,9 +10,10 @@ from bot import Strategy,observe
 from match import Match
 
 
-def run(games=20,left='nightmare',right='hard',style='swing',rival=Strategy):
+def run(games=20,left='nightmare',right='hard',style='swing',rival=Strategy,seed_offset=0):
     stats=dict(games=games,left=left,right=right,style=style,wins=0,losses=0,draws=0,unfinished=0,invalid=0,decisions=0,max_decision_ms=0)
-    for seed in range(games):
+    stats['seed_offset']=seed_offset
+    for seed in range(seed_offset,seed_offset+games):
         random.seed(seed+77000)
         now=[100000.]
         m=Match({'settlement_seconds':0},monotonic=lambda:now[0],wall=lambda:now[0])
@@ -42,6 +43,8 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--games',type=int,default=20)
     parser.add_argument('--previous',type=Path,help='Verified source archive containing the previous bot.py')
     parser.add_argument('--only-previous',action='store_true',help='Compare both updated difficulties to their previous implementations')
+    parser.add_argument('--difficulty',choices=('hard','nightmare'),help='Limit the previous-version comparison to one difficulty')
+    parser.add_argument('--seed-offset',type=int,default=0,help='Use a separate reproducible seed block for a holdout run')
     args=parser.parse_args()
     if args.previous:
         import types,zipfile
@@ -53,9 +56,9 @@ if __name__=='__main__':
                 exec(compile(archive.read('tactics.py'),'previous_tactics.py','exec'),tactics.__dict__)
                 source=source.replace('from tactics import Planner','from previous_tactics import Planner')
             exec(compile(source,'previous_bot.py','exec'),previous.__dict__)
-        for difficulty in (('hard','nightmare') if args.only_previous else ('hard',)):
+        for difficulty in ((args.difficulty,) if args.difficulty else ('hard','nightmare') if args.only_previous else ('hard',)):
             for style in (('swing',) if difficulty=='nightmare' else ('conservative','gambler','swing')):
-                print(json.dumps(run(args.games,left=difficulty,right=difficulty,style=style,rival=previous.Strategy)),flush=True)
+                print(json.dumps(run(args.games,left=difficulty,right=difficulty,style=style,rival=previous.Strategy,seed_offset=args.seed_offset)),flush=True)
     if not args.only_previous:
         for style in ('conservative','gambler','swing'):
-            print(json.dumps(run(args.games,style=style)),flush=True)
+            print(json.dumps(run(args.games,style=style,seed_offset=args.seed_offset)),flush=True)

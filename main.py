@@ -17,7 +17,7 @@ os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 import pygame as pg
 import re7_21 as engine
 from re7_21 import GameState
-from cards import CARDS, CATEGORIES, info
+from cards import CARDS, CATEGORIES, info, english_name
 from bot import BotSession, DIFFICULTIES, STYLES
 from sound import SoundManager, SoundTracker
 from match import load_timer, timer_config
@@ -284,7 +284,7 @@ class App:
     def header(self):
         self.text('21', 32, 20, 40, GOLD, True)
         self.text('RE7 / 21', 98, 29, 20, INK, True)
-        self.text(self.t('地下室 · 生存牌局', 'THE BASEMENT'), 99, 55, 12, RED)
+        self.text(self.t('禁止公开的录像', 'BANNED FOOTAGE'), 99, 55, 12, RED)
         if self.scene == 'menu':
             self.button((300, 27, 120, 42), self.t('手动更新', 'Updates'), 'updates')
         if self.scene in ('menu', 'solo_setup'):
@@ -317,10 +317,10 @@ class App:
             self.text(self.t('暗牌', 'HIDDEN') if secret else '· 21 ·', x+10, y+height-24, 11, (93, 65, 43))
 
     def menu(self):
-        self.text(self.t('地下室录像 / 最后一场游戏', 'BASEMENT TAPE / THE LAST GAME'), 70, 151, 17, RED)
-        self.text(self.t('生 死 二 十 一', 'TWENTY ONE'), 64, 206, 64, INK, True)
-        self.text(self.t('下一张，可能就是代价。', 'Every hand has a price.'), 70, 310, 29, RED)
-        self.wrap(self.t('灯还亮着。牌已经发下。\n靠近二十一点，或者把命运交给下一张牌。', 'The light is still on. The cards are dealt.\nGet close to twenty-one. Leave the rest to chance.'), pg.Rect(72, 379, 590, 105), 20)
+        self.text(self.t('禁止公开的录像', 'BANNED FOOTAGE'), 70, 151, 17, RED)
+        self.text(self.t('二 十 一 点', 'TWENTY ONE'), 64, 206, 64, INK, True)
+        self.text(self.t('赌上你的命。', 'Your life is on the line.'), 70, 310, 29, RED)
+        self.wrap(self.t('尽量接近 21 点，但别超过。\n输掉这一局，就付出代价。', 'Get as close to 21 as you can without going over.\nLose the hand. Pay the price.'), pg.Rect(72, 379, 590, 105), 20)
         self.number_card(7, 105, 518, 142, 193)
         self.number_card(3, 272, 492, 142, 193, hidden=True)
         self.number_card(11, 439, 518, 142, 193)
@@ -328,8 +328,8 @@ class App:
         self.text('02 / ADAPT', 282, 760, 14, MUTED)
         self.text('03 / OUTPLAY', 476, 760, 14, MUTED)
         self.panel((780, 144, 590, 654))
-        self.text(self.t('欢迎来到游戏', 'WELCOME TO THE GAME'), 820, 178, 28, INK, True)
-        self.text(self.t('坐下。看看谁能撑到最后。', 'Take a seat. See who makes it out.'), 822, 231, 17, MUTED)
+        self.text(self.t('开始游戏', 'PLAY'), 820, 178, 28, INK, True)
+        self.text(self.t('坐下，发牌。', 'Take a seat. Deal the cards.'), 822, 231, 17, MUTED)
         self.button((822, 285, 244, 60), self.t('人机对战   →', 'Play against AI   →'), 'solo_setup', True)
         self.button((1082, 285, 246, 60), self.t('选择联机方式', 'Multiplayer options'), 'network')
         self.text(self.t('房主计时：', 'Host clock: ')+self.clock_label(), 822, 360, 15, MUTED)
@@ -346,7 +346,7 @@ class App:
 
     def solo_setup(self):
         self.text(self.t('人机对战', 'PLAY AGAINST AI'), 180, 129, 38, INK, True)
-        self.text(self.t('选择实力，再选择性格。每一位对手，都有自己的节奏。', 'Choose their skill. Choose their character. Find your next rival.'), 182, 186, 20, MUTED)
+        self.text(self.t('选择难度和对手。', 'Choose a difficulty and an opponent.'), 182, 186, 20, MUTED)
         self.text(self.t('01 / 难度', '01 / DIFFICULTY'), 183, 246, 17, GOLD)
         for i, (key, values) in enumerate(DIFFICULTIES.items()):
             rect = pg.Rect(180+i*278, 284, 258, 151)
@@ -356,7 +356,7 @@ class App:
             self.buttons.append((rect, ('difficulty', key)))
         self.text(self.t('02 / 打法风格', '02 / PLAY STYLE'), 183, 470, 17, GOLD)
         if self.difficulty == 'nightmare':
-            self.text(self.t('极难模式自主调整策略，忽略下方风格选择。', 'Nightmare adapts freely; the style selection below is ignored.'), 445, 470, 16, RED)
+            self.text(self.t('极难模式不区分打法。', 'Play style does not apply to Nightmare.'), 445, 470, 16, RED)
         for i, (key, values) in enumerate(STYLES.items()):
             rect = pg.Rect(180+i*370, 508, 340, 162)
             self.panel(rect, PANEL, GOLD if self.style == key else LINE)
@@ -365,7 +365,7 @@ class App:
             self.buttons.append((rect, ('style', key)))
         self.button((180, 714, 245, 58), self.t('返回大厅', 'Back to lobby'), 'menu')
         self.button((445, 714, 815, 58), self.t('开始对战   →', 'Start practice   →'), 'solo_start', True)
-        self.text(self.t('公平对局 · AI 看不到你的暗牌 · 沿用你的自定义规则', 'Fair play · AI cannot see your hidden card · Your custom rules apply'), 183, 802, 17, MUTED)
+        self.text(self.t('对手无法看到你的底牌。', 'Your opponent cannot see your hidden card.'), 183, 802, 17, MUTED)
 
     def waiting(self):
         if self.net_room:
@@ -443,7 +443,7 @@ class App:
             mood = ''
             if self.style == 'swing' and self.bot_mood:
                 mood = ' / '+STYLES[self.bot_mood][0 if self.zh else 1]
-            self.text(f'AI · {difficulty}'+(self.t(' · 自适应猎杀',' · Adaptive') if self.difficulty=='nightmare' else f' · {style}{mood}'), 230, 112, 16, GOLD, width=565)
+            self.text(f'AI · {difficulty}'+('' if self.difficulty=='nightmare' else f' · {style}{mood}'), 230, 112, 16, GOLD, width=565)
         turn = self.t('你的行动', 'YOUR TURN') if gs.turn == self.pid else self.t('对手行动中', 'OPPONENT’S TURN')
         if gs.phase != 'ACTION':
             turn = self.t('本局结算', 'ROUND RESULT')
@@ -521,7 +521,7 @@ class App:
             rect = pg.Rect(223+i*127, 330, 117, 72)
             mine = card['owner'] == self.pid
             self.panel(rect, (48, 33, 24) if mine else (49, 22, 21), (113, 82, 51) if mine else (121, 43, 35))
-            name = info(card['name'])[0] if self.zh else card['name']
+            name = info(card['name'])[0] if self.zh else english_name(card['name'])
             self.text(self.t('你的', 'YOURS') if mine else self.t('对手', 'OPPONENT'), rect.x+9, rect.y+7, 11, GOLD if mine else RED)
             self.text(name, rect.x+9, rect.y+29, 16, INK, True, 100)
             self.text(self.t('查看效果', 'Inspect'), rect.x+9, rect.y+54, 10, MUTED)
@@ -554,8 +554,8 @@ class App:
         pg.draw.line(self.canvas, color, (rect.x+16, rect.y+1), (rect.right-16, rect.y+1), 2)
         self.text(cat_zh if self.zh else cat_en, rect.x+14, rect.y+13, 12, color)
         self.text(symbol, rect.right-38, rect.y+7, 24, color)
-        self.text(zh if self.zh else name, rect.x+14, rect.y+54, 18, INK, True, rect.w-25)
-        self.text(name if self.zh else zh, rect.x+14, rect.y+87, 12, MUTED, width=rect.w-25)
+        self.text(zh if self.zh else english_name(name), rect.x+14, rect.y+54, 18, INK, True, rect.w-25)
+        self.text(english_name(name) if self.zh else zh, rect.x+14, rect.y+87, 12, MUTED, width=rect.w-25)
         if selected and not floating:
             self.text(self.t('已选择', 'SELECTED'), rect.x+14, rect.bottom-24, 11, GOLD)
         if disabled:
@@ -575,7 +575,7 @@ class App:
         self.text(self.t('牌堆剩余', 'DECK LEFT'), 1239, 154, 13, MUTED)
         self.text(len(gs.deck), 1239, 178, 30, INK, True)
         pg.draw.line(self.canvas, LINE, (1060, 239), (1382, 239))
-        self.text(self.t('预计造成 / 承受伤害', 'DAMAGE OUT / IN'), 1060, 256, 14, MUTED)
+        self.text(self.t('对手赌注 / 你的赌注', 'THEIR BET / YOUR BET'), 1060, 256, 14, MUTED)
         self.text(f'{gs.calculate_potential_damage(3-self.pid)} / {gs.calculate_potential_damage(self.pid)}', 1281, 251, 25, GOLD, True, 102)
         self.panel((1034, 326, 374, 151))
         allowed = self.can_act()
@@ -593,22 +593,22 @@ class App:
             name = self.notice[0]
             zh, cat, desc, en = info(name)
             self.text(self.t('对手打出了王牌', 'OPPONENT PLAYED'), 1056, 513, 18, RED, True)
-            self.text(zh if self.zh else name, 1056, 556, 30, INK, True, 326)
+            self.text(zh if self.zh else english_name(name), 1056, 556, 30, INK, True, 326)
             self.wrap(desc if self.zh else en, pg.Rect(1056, 620, 326, 132), 19, INK)
             self.button((1056, 780, 326, 44), self.t('知道了', 'Continue'), 'dismiss_notice')
         elif self.effect_selected:
             zh, cat, desc, en = info(self.effect_selected)
             self.text(self.t('场上王牌', 'IN PLAY'), 1056, 513, 16, GOLD)
-            self.text(zh if self.zh else self.effect_selected, 1056, 554, 27, INK, True, 326)
+            self.text(zh if self.zh else english_name(self.effect_selected), 1056, 554, 27, INK, True, 326)
             self.wrap(desc if self.zh else en, pg.Rect(1056, 620, 326, 132), 19)
             self.button((1056, 780, 326, 44), self.t('关闭详情', 'Close details'), 'close_effect')
         elif self.selected is not None and self.selected < len(trumps):
             name = trumps[self.selected][0]
             zh, cat, desc, en = info(name)
             color = CATEGORIES[cat][2]
-            self.text(self.t('卡牌详情', 'CARD DETAIL'), 1060, 513, 13, color)
-            self.text(zh if self.zh else name, 1060, 546, 26, INK, True, 319)
-            self.text(name if self.zh else zh, 1060, 590, 14, MUTED)
+            self.text(self.t('王牌效果', 'TRUMP CARD'), 1060, 513, 13, color)
+            self.text(zh if self.zh else english_name(name), 1060, 546, 26, INK, True, 319)
+            self.text(english_name(name) if self.zh else zh, 1060, 590, 14, MUTED)
             self.wrap(desc if self.zh else en, pg.Rect(1060, 628, 320, 126), 18)
             self.button((1054, 779, 161, 47), self.t('使用王牌', 'Play trump'), 'play', True, allowed and self.trump_allowed(trumps[self.selected]))
             self.button((1227, 779, 161, 47), self.t('弃置', 'Discard'), 'discard', enabled=allowed, danger=True)
@@ -617,8 +617,8 @@ class App:
         else:
             if getattr(gs, 'last_result', None):
                 self.button((1056, 780, 326, 44), self.t('回看上一局', 'Review last round'), 'last_result')
-            self.text(self.t('下一步，由你决定', 'Your next move'), 1060, 552, 25, INK, True)
-            self.wrap(self.t('向牌桌拖动王牌即可打出；水平向右拖动即可弃置。点击仍可查看说明。', 'Drag a trump onto the table to play; drag horizontally right to discard. Click to inspect.'), pg.Rect(1060, 614, 318, 125), 18)
+            self.text(self.t('你的王牌', 'YOUR TRUMP CARDS'), 1060, 552, 25, INK, True)
+            self.wrap(self.t('拖向牌桌：使用\n向右拖动：弃牌\n点击：查看效果', 'Drag to the table to play.\nDrag right to discard.\nClick to inspect.'), pg.Rect(1060, 614, 318, 125), 18)
 
     def result_explanation(self, data):
         a, b = [sum(hand) for hand in data['hands']]
@@ -663,10 +663,10 @@ class App:
             won = gs.round_winner == self.pid
             # An engraved end card in the sidebar leaves both revealed hands clear.
             self.panel((1048, 340, 345, 320), (27, 17, 15), GOLD if won else RED)
-            self.text('EXECUTIONER', 1070, 365, 21, MUTED, True)
-            self.text(self.t('处刑者已倒下', 'SLAYER') if won else self.t('你已被处决', 'EXECUTED'), 1070, 412, 34, GOLD if won else RED, True, 305)
+            self.text('NIGHTMARE', 1070, 365, 21, MUTED, True)
+            self.text(self.t('挑战成功', 'SURVIVAL COMPLETE') if won else self.t('你死了', 'YOU ARE DEAD'), 1070, 412, 34, GOLD if won else RED, True, 305)
             pg.draw.line(self.canvas,GOLD if won else RED,(1070,474),(1371,474),2)
-            self.wrap(self.t('你击败了极难对手。\n这一次，活着离开牌桌。','You defeated the Nightmare.\nThis time, you leave alive.') if won else self.t('你的筹码，已经耗尽。\n处刑者等待下一位挑战者。','Your stake is spent.\nThe Executioner awaits the next challenger.'),pg.Rect(1070,505,300,115),20,INK)
+            self.wrap(self.t('极难挑战完成。\n你活下来了。','Nightmare cleared.\nYou survived.') if won else self.t('游戏结束。','Game over.'),pg.Rect(1070,505,300,115),20,INK)
         reason = getattr(gs, 'end_reason', '')
         special_end = self.solo and self.difficulty == 'nightmare' and gs.phase == 'GAMEOVER' and gs.round_winner
         if reason and not special_end:
@@ -710,12 +710,12 @@ class App:
         if name:
             self.text(self.t('已启用', 'ENABLED') if enabled.get(name, False) else self.t('抽取概率为 0', 'DRAW CHANCE: 0'), 1001, 616, 14, GOLD)
             zh, _, desc, english = info(name)
-            self.text(zh if self.zh else name, 1001, 217, 25, GOLD, True, 278)
-            self.text(name if self.zh else zh, 1001, 261, 16, MUTED, width=278)
+            self.text(zh if self.zh else english_name(name), 1001, 217, 25, GOLD, True, 278)
+            self.text(english_name(name) if self.zh else zh, 1001, 261, 16, MUTED, width=278)
             self.wrap(desc if self.zh else english, pg.Rect(1001, 315, 277, 277), 19)
         else:
-            self.wrap(self.t('选择任意王牌，查看中文名称与效果说明。', 'Choose a trump to read its name and effect.'), pg.Rect(1001, 239, 276, 140), 21)
-        self.wrap(self.t('“图鉴效果”表示参考图片中的设计；已知原版实现差异详见 README。', '“Reference” describes the card sheet. Known engine differences are documented in README.'), pg.Rect(137, 688, 1100, 49), 16, MUTED)
+            self.wrap(self.t('选择一张王牌。', 'Select a trump card.'), pg.Rect(1001, 239, 276, 140), 21)
+        self.wrap(self.t('灰色王牌不会在当前规则下抽到。', 'Greyed-out cards are disabled under the current rules.'), pg.Rect(137, 688, 1100, 49), 16, MUTED)
         self.button((136, 758, 150, 46), self.t('上一页', 'Previous'), 'book_prev', enabled=self.book_page > 0)
         self.text(f'{self.book_page+1} / {pages}   ·   {len(CARDS)} '+self.t('张王牌', 'trumps'), 318, 770, 17, GOLD)
         self.button((1153, 758, 150, 46), self.t('下一页', 'Next'), 'book_next', enabled=self.book_page+1 < pages)
@@ -1036,7 +1036,7 @@ class App:
             timer=(self.net_lobby or {}).get('timer',{})
             rows=[(self.t(row[1],row[2]),settings.get(row[0],'—')) for row in GAME]+[(self.t(row[1],row[2]),timer.get(row[0],'—')) for row in TIMER]
             weights=(self.net_lobby or {}).get('rules',{}).get('trump_weights',{})
-            rows += [(self.t(info(name)[0],name),value) for name,value in sorted(weights.items(),key=lambda item:(item[1]==0,item[0])) if type(value) in (int,float)]
+            rows += [(self.t(info(name)[0],english_name(name)),value) for name,value in sorted(weights.items(),key=lambda item:(item[1]==0,item[0])) if type(value) in (int,float)]
             pages=max(1,(len(rows)+10)//11);self.net_rules_page=min(self.net_rules_page,pages-1)
             for i,(label,value) in enumerate(rows[self.net_rules_page*11:self.net_rules_page*11+11]): self.text(label+': '+str(value),155,195+i*42,20,INK)
             self.button((155,680,160,40),'‹',('rules_page',-1),enabled=self.net_rules_page>0)

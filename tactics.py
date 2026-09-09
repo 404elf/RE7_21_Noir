@@ -8,6 +8,7 @@ import math
 import random
 import types
 from functools import lru_cache
+from dataclasses import replace
 
 import re7_21 as engine
 
@@ -102,6 +103,60 @@ class Planner:
         self.seen=set()
         self.belief={}
         self.last_plan=()
+        self.pending_probe=None
+
+    def protected_probe(self,v,belief,extra):
+        """Buy information only when it changes a consequential decision.
+
+        Successful probes that bust are immediately returned; a failed probe
+        must never return an unrelated card. Only public posterior branches
+        enter the value calculation, not sampled private opponent hands.
+        """
+        pending,self.pending_probe=self.pending_probe,None
+        if pending and pending[0]==v.round_key:
+            _,before,number=pending
+            if v.hand==before+(number,) and sum(v.hand)>v.target:
+                for i,c in enumerate(v.trumps):
+                    if c[1]=='RETURN' and not v.trump_locked and not v.table_full and extra<12:
+                        self.last_plan=(('TRUMP',c),)
+                        return f'TRUMP:{i}'
+        if not self.nightmare or extra>10 or len(v.trumps)<5 or not v.opponent_stopped:
+            return None
+        if v.trump_locked or v.draw_locked or v.table_full or not v.deck_count or sum(v.hand)>v.target:
+            return None
+        returns=[c for c in v.trumps if c[1]=='RETURN']
+        own_slots=sum(p==1 for p,*rest in v.table)
+        if not returns or own_slots+2>engine.MAX_TABLE_SLOTS: return None
+        stake=max(v.incoming,v.outgoing)
+        if stake<3 and v.incoming<v.hp and v.outgoing<v.opponent_hp: return None
+        # Value of choosing hold/draw/target AFTER observing the probe outcome.
+        targets={v.target}|{c[2] for c in v.trumps if c[1]=='TARGET'}
+        def best(posterior):
+            choices=[]
+            for target in targets:
+                stay,draw=self.draw_values(replace(v,target=target),posterior)
+                cost=0.10 if target!=v.target else 0.
+                choices.extend((stay-cost,draw-cost))
+            return max(choices)
+        baseline=best(belief)
+        candidate=None
+        for i,c in enumerate(v.trumps):
+            if c[1]!='DRAW_SPEC' or sum(v.hand)+c[2]<=v.target:continue
+            p=belief.get(c[2],0.)
+            if not .10<=p<=.80:continue
+            success={n:w/(1-p) for n,w in belief.items() if n!=c[2]}
+            improvement=p*best({c[2]:1.})+(1-p)*best(success)-baseline
+            # Charge both scarce trumps, including Return's alternative uses.
+            cost=reserve(c)+(1-p)*reserve(returns[0])+.15
+            value=improvement*min(stake,6)-cost
+            if value>.12 and (candidate is None or value>candidate[0]):
+                candidate=(value,i,c)
+        if candidate:
+            _,i,c=candidate
+            self.pending_probe=(v.round_key,v.hand,c[2])
+            self.last_plan=(('TRUMP',c),('TRUMP',returns[0]))
+            return f'TRUMP:{i}'
+        return None
 
     def infer(self,v):
         pool=tuple(n for n in v.numbers if n not in v.hand+v.opponent_visible)
@@ -284,6 +339,8 @@ class Planner:
                 return f'DISCARD:{shields[0]}'
         baseline=self.expected(worlds)
         belief=self.infer(v)
+        probe=self.protected_probe(v,belief,extra)
+        if probe: return probe
         stay_value,draw_value=self.draw_values(v,belief)
         if extra<max_extra and not v.trump_locked and not v.table_full:
             guaranteed = sum(w for gs,w in worlds if sum(gs.p1_hand)<=gs.target_score and (sum(gs.p1_hand)>sum(gs.p2_hand) or sum(gs.p2_hand)>gs.target_score))
