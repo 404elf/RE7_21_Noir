@@ -97,6 +97,18 @@ def score(gs):
 
 
 class Planner:
+    @staticmethod
+    def certainly_ahead(v):
+        """A current win for EVERY possible hole card, not just likely samples.
+
+        Recomputed from each new observation: staying is a one-turn choice,
+        never a latch that prevents responding after the opponent acts.
+        """
+        total=sum(v.hand)
+        hidden=[n for n in v.numbers if n not in v.hand+v.opponent_visible]
+        visible=sum(v.opponent_visible)
+        return total<=v.target and bool(hidden) and all(visible+n<total or visible+n>v.target for n in hidden)
+
     def __init__(self,rng,nightmare=False):
         self.rng,self.nightmare=rng,nightmare
         self.key=None
@@ -339,6 +351,7 @@ class Planner:
                 return f'DISCARD:{shields[0]}'
         baseline=self.expected(worlds)
         belief=self.infer(v)
+        wait_for_card=self.certainly_ahead(v)
         probe=self.protected_probe(v,belief,extra)
         if probe: return probe
         stay_value,draw_value=self.draw_values(v,belief)
@@ -354,7 +367,7 @@ class Planner:
         # Safe low-total draws preserve targeted/target-changing trumps for when
         # the extra information makes them useful. Emergency protection above
         # remains possible when handing over exposes lethal damage.
-        if not v.draw_locked and v.deck_count and belief and sum(v.hand)+max(belief)<=v.target and sum(v.hand)<v.target*.75 and stay_value<.8:
+        if not wait_for_card and not v.draw_locked and v.deck_count and belief and sum(v.hand)+max(belief)<=v.target and sum(v.hand)<v.target*.75 and stay_value<.8:
             self.last_plan=(('HIT',None),)
             return 'HIT'
         def information(path):
@@ -375,6 +388,7 @@ class Planner:
             expanded=[]
             for states,path in frontier:
                 for end in ('STAY','HIT'):
+                    if end=='HIT' and not path and wait_for_card: continue
                     if end=='HIT' and (v.draw_locked or any(not legal(gs,1) for gs,w in states)): continue
                     after=[(play(gs,1,(end,None)),w) for gs,w in states]
                     # Holding has a future opponent turn too, unless both stopped.
@@ -386,6 +400,7 @@ class Planner:
                 common=set(states[0][0].p1_trumps)
                 for gs,w in states[1:]: common.intersection_update(gs.p1_trumps)
                 for card in sorted(common):
+                    if not path and wait_for_card and card[1] in ('DRAW_SPEC','DRAW_SPEC_PLUS','PERFECT','PERFECT_PLUS','ULTIMATE_DRAW','DEATH_DESTROY'):continue
                     if card[1] in ('ADD','ADD_21','GAMBLE') and not self.ready_to_raise(states):continue
                     if card[1]=='TARGET' and card[2]==states[0][0].target_score:continue
                     actions=[('TRUMP',card)]
@@ -431,7 +446,7 @@ class Planner:
             self.last_plan=(('HIT',None),)
             return 'HIT'
         raised=any(owner==1 and kind in ('ADD','ADD_21','GAMBLE') for owner,name,kind,value,counter in v.table)
-        if not self.nightmare and mood=='gambler' and action=='STAY' and not (raised and stay_value>=0) and not v.opponent_stopped and not v.draw_locked and v.deck_count and sum(v.hand)<v.target:
+        if not wait_for_card and not self.nightmare and mood=='gambler' and action=='STAY' and not (raised and stay_value>=0) and not v.opponent_stopped and not v.draw_locked and v.deck_count and sum(v.hand)<v.target:
             pool=tuple(self.infer(v))
             if pool and sum(sum(v.hand)+n>v.target for n in pool)/len(pool)<=.75 and self.rng.random()<.32:
                 return 'HIT'

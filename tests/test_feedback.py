@@ -64,7 +64,8 @@ class Feedback(unittest.TestCase):
         self.assertEqual(Strategy('hard','conservative',1).choose(v),'TRUMP:0')
         v=replace(v,hand=(10,11,3),trumps=(('Go 24','TARGET',24),))
         self.assertEqual(Strategy('hard','conservative',1).choose(v),'TRUMP:0')
-        v=replace(v,hand=(10,8),opponent_visible=(4,),opponent_stopped=False,trumps=())
+        # Risk appetite applies to an uncertain lead; a proven win now waits.
+        v=replace(v,hand=(10,8),opponent_visible=(9,),opponent_stopped=False,trumps=())
         bold=sum(Strategy('hard','gambler',seed).choose(v)=='HIT' for seed in range(200))
         safe=sum(Strategy('hard','conservative',seed).choose(v)=='HIT' for seed in range(200))
         self.assertGreater(bold,safe+40)
