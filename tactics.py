@@ -34,6 +34,13 @@ def legal(gs,pid,card=None):
         return bool(gs.deck) and not gs.check_bust(pid) and not any(t['type'] in ('SILENCE','GAMBLE') for t in enemy)
     if any(t['type']=='DESTROY_BLOCK' for t in enemy): return False
     own = [t for t in gs.active_trumps if t['owner']==pid]
+    if card[1]=='DRAW_SPEC':
+        # Only use information available to this player. Never consult the
+        # sampled enemy hole card or deck membership: unknown numbers can probe.
+        known = getattr(gs,f'p{pid}_hand') + getattr(gs,f'p{3-pid}_hand')[1:]
+        unavailable = card[2] in known or not gs.deck or any(t['type'] in ('SILENCE','GAMBLE') for t in enemy)
+        secondary = any(t['type']=='HARVEST' for t in own) or any(t['type'] in ('FORCE_CONSUME','FORCE_CONSUME_PLUS') for t in enemy)
+        if unavailable and not secondary: return False
     return len(own)<engine.MAX_TABLE_SLOTS or card[1] in ('SHIELD_ATTACK','SHIELD_ATTACK_PLUS','OBLIVION') or (card[1]=='TARGET' and any(t['type']=='TARGET' for t in own))
 
 

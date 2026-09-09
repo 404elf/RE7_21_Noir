@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from bot import Strategy,observe
 from match import Match
+from tactics import legal,play
 
 
 def position(ours,theirs,trumps=()):
@@ -20,6 +21,34 @@ def position(ours,theirs,trumps=()):
 
 
 class DecisionFeedback(unittest.TestCase):
+    def test_known_unavailable_number_is_not_played_or_discarded_with_space(self):
+        for ours,theirs,value in (([4,9,7],[8,2,1],4),([4,9,7],[8,6,1],6)):
+            m=position(ours,theirs,[('Number','DRAW_SPEC',value)])
+            for s in self.strategies():
+                self.assertIn(s.choose(observe(m.gs)),('HIT','STAY'))
+
+    def test_number_filter_uses_visible_information_and_preserves_secondary_effects(self):
+        m=position([4,9,7],[8,6,1],[('Four','DRAW_SPEC',4)])
+        g=m.gs
+        for value in (4,9,7,6,1):
+            self.assertFalse(legal(g,2,('Number','DRAW_SPEC',value)))
+        # The actual hidden eight is unavailable, but the AI cannot know that.
+        self.assertTrue(legal(g,2,('Eight','DRAW_SPEC',8)))
+        self.assertTrue(legal(g,2,('Four+','DRAW_SPEC_PLUS',4)))
+        self.assertIsNotNone(play(g,2,('DISCARD',g.p2_trumps[0])))
+        for owner,kind in ((2,'HARVEST'),(1,'FORCE_CONSUME')):
+            g.active_trumps=[dict(owner=owner,type=kind,name=kind,val=2)]
+            self.assertTrue(legal(g,2,('Four','DRAW_SPEC',4)))
+
+    def test_number_filter_rechecks_after_return_and_draw_lock(self):
+        m=position([9,4],[8,6],[])
+        card=('Four','DRAW_SPEC',4)
+        self.assertFalse(legal(m.gs,2,card))
+        m.gs.p2_hand.remove(4);m.gs.deck.append(4)
+        self.assertTrue(legal(m.gs,2,card))
+        m.gs.active_trumps=[dict(owner=1,type='SILENCE',name='Silence',val=0)]
+        self.assertFalse(legal(m.gs,2,card))
+
     def strategies(self):
         for difficulty in ('hard','nightmare'):
             for style in ('conservative','gambler','swing'):
