@@ -27,6 +27,6 @@ foreach ($name in @('network.json','room-server.json','start-room-server.cmd','N
     Copy-Item -LiteralPath $name -Destination (Join-Path $packageRoot $name)
 }
 New-Item -ItemType Directory -Path (Join-Path $packageRoot 'docs') | Out-Null
-foreach ($name in @('AI-v1.4.1.md','ai-v141-calibrated-benchmark.jsonl','AI-v1.4.3.md','ai-v142-release-benchmark.jsonl')) {
+foreach ($name in @('AI-v1.4.1.md','ai-v141-calibrated-benchmark.jsonl','AI-v1.4.2.md','AI-v1.4.3.md','ai-v142-release-benchmark.jsonl')) {
     Copy-Item -LiteralPath (Join-Path 'docs' $name) -Destination (Join-Path $packageRoot "docs/$name")
 }
