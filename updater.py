@@ -163,7 +163,7 @@ class Updater:
         try:
             self.current = read_json(player_config(self.root,'version.json'))['version']
         except (OSError, ValueError, KeyError):
-            self.current = '1.5.0'
+            self.current = '1.5.1'
 
     def start(self, download=False):
         if self.busy:

@@ -16,7 +16,7 @@ import uuid
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from re7_21 import recv_msg,send_msg
-package=ROOT/'dist/v1.5.0/RE7_21_Noir'
+package=ROOT/'dist/v1.5.1/RE7_21_Noir'
 work=ROOT/('build/player-package-migration-'+uuid.uuid4().hex[:8])
 shutil.copytree(package,work)
 # Simulate the root files copied by a v1.4.x updater into its compatibility asset.

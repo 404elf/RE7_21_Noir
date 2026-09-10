@@ -46,6 +46,8 @@ Source setup: Python 3.12, install `requirements.txt`, then run `python main.py`
 
 ## Updates
 
+**v1.5.1**: AI matches use separate local ports to avoid startup conflicts. Add 1 / 2 now only raise the bet, without drawing a bonus trump. Harvest remains a separate effect.
+
 **v1.5.0**: interruptible card details, relative logs, numeric-trump draw-order fix, independent opening preparation, time presets, random locks, a chat-AI configuration guide and a cleaner Windows package. Includes v1.4.5's wait-when-certainly-ahead strategy.
 
 [Previous releases →](CHANGELOG.md)

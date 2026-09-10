@@ -492,13 +492,8 @@ class GameState:
         
         self.active_trumps.append(new_trump)
         
-        # === 【修正点 1】增加一/二 (ADD) 需要抽一张王牌 ===
-        # 注意：S-Attack 也会生成 ADD 类型的效果，但它是通过 SHIELD_ATTACK 转换的，
-        # 不会进入这个 if，所以不会导致 S-Attack 误抽牌，符合逻辑。
-        if ctype == "ADD":
-            self.give_trump(pid, 1)
-        
-        elif ctype == "DESTROY_SINGLE":
+        # 加注仅改变赌注；获得王牌由独立的收割等效果处理。
+        if ctype == "DESTROY_SINGLE":
             found_idx = -1
             # 倒序遍历（从最新的牌往回找）
             for i in range(len(self.active_trumps) - 1, -1, -1):

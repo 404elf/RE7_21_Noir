@@ -80,11 +80,13 @@ class Connection:
 
         def worker():
             connected = None
+            port = engine.DEFAULT_PORT
             try:
                 if host:
                     # Avoid silently joining an unrelated listener on the legacy port.
                     with socket.socket() as probe:
-                        probe.bind(('0.0.0.0', engine.DEFAULT_PORT))
+                        probe.bind(('127.0.0.1',0) if bot_options else ('0.0.0.0',port))
+                        port=probe.getsockname()[1]
                     with self.lock:
                         if generation != self.generation:
                             return
@@ -92,15 +94,19 @@ class Connection:
                         if timer is not None:
                             argv += ['--timer', json.dumps(timer)]
                         environment=os.environ.copy()
-                        if bot_options: environment['RE7_BIND']='127.0.0.1'
+                        if bot_options:
+                            environment['RE7_BIND']='127.0.0.1'
+                            environment['RE7_PORT']=str(port)
                         self.server = subprocess.Popen(
                             argv, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             env=environment,
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-                deadline = time.monotonic() + 5
+                deadline = time.monotonic() + (15 if bot_options else 5)
                 while generation == self.generation:
                     try:
-                        connected = connect(address, engine.DEFAULT_PORT)
+                        if host and self.server and self.server.poll() is not None:
+                            raise ConnectionError('Session server exited during startup')
+                        connected = connect('127.0.0.1' if bot_options else address, port)
                         break
                     except OSError:
                         if not host or time.monotonic() >= deadline:
@@ -122,7 +128,7 @@ class Connection:
                         self.bot = BotSession(
                             *bot_options,
                             on_error=lambda: self.events.put((generation, 'error', 'bot')),
-                            on_mood=lambda mood: self.events.put((generation, 'mood', mood)))
+                            on_mood=lambda mood: self.events.put((generation, 'mood', mood)),port=port)
                         self.bot.start()
                 connected.settimeout(310)  # Waiting rooms are bounded; match snapshots arrive frequently.
                 while generation == self.generation:

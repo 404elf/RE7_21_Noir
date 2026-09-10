@@ -277,7 +277,8 @@ class Strategy:
 
 class BotSession:
     """A real second client; speaks the same commands and obeys server cooldowns."""
-    def __init__(self, difficulty, style, on_error=lambda: None, on_mood=lambda mood: None):
+    def __init__(self, difficulty, style, on_error=lambda: None, on_mood=lambda mood: None, port=None):
+        self.port = engine.DEFAULT_PORT if port is None else port
         self.strategy = Strategy(difficulty, style)
         self.on_error, self.on_mood = on_error, on_mood
         self.stop = threading.Event()
@@ -302,7 +303,7 @@ class BotSession:
 
     def run(self):
         try:
-            self.sock = socket.create_connection(('127.0.0.1', engine.DEFAULT_PORT), timeout=3)
+            self.sock = socket.create_connection(('127.0.0.1', self.port), timeout=5)
             if self.stop.is_set():
                 return
             if engine.recv_msg(self.sock) != 'ID:2':
