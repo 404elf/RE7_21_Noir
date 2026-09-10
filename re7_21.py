@@ -243,16 +243,8 @@ class GameState:
                 target.append(self.get_trump_card())
 
     def full_reset(self):
-        self.p1_fingers = MAX_HP
-        self.p2_fingers = MAX_HP
-        self.p1_trumps = []
-        self.p2_trumps = []
-        self.active_trumps = []
-        self.p1_req_rematch = False
-        self.p2_req_rematch = False
-        self.give_trump(1, 3)
-        self.give_trump(2, 3)
-        self.reset_round(init=True)
+        # A rematch uses exactly the same configured initialization as launch.
+        self.__init__()
 
     def reset_round(self, init=False):
         self.is_escape_end = False  # <--- 【新增】初始化逃脱结束标记

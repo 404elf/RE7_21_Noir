@@ -290,6 +290,11 @@ class Planner:
             # Observation constructors used by tests/custom callers may omit table.
             if v.draw_locked and not any(t['owner']==2 and t['type'] in ('SILENCE','GAMBLE') for t in gs.active_trumps):
                 gs.active_trumps.append(dict(owner=2,name='Silence',type='SILENCE',val=0))
+            if v.trump_locked and not any(t['owner']==2 and t['type']=='DESTROY_BLOCK' for t in gs.active_trumps):
+                gs.active_trumps.append(dict(owner=2,name='Blockade',type='DESTROY_BLOCK',val=0))
+            if v.table_full:
+                missing=max(0,engine.MAX_TABLE_SLOTS-sum(t['owner']==1 for t in gs.active_trumps))
+                gs.active_trumps.extend(dict(owner=1,name='Occupied',type='UNKNOWN',val=0) for _ in range(missing))
             if not v.table:
                 for victim,damage in ((1,v.incoming),(2,v.outgoing)):
                     if damage>1: gs.active_trumps.append(dict(owner=3-victim,name='Stake',type='ADD',val=damage-1))
@@ -342,10 +347,17 @@ class Planner:
             # target plans and reserve cards useful, instead of blindly cashing out.
             future=clone(enemy);future.cleanup_player_instants(1)
             counter=[future]
-            for card in sorted(set(future.p1_trumps)):
-                if card[1]=='OBLIVION': continue
-                child=play(future,1,('TRUMP',card))
-                if child is not None: counter.append(child)
+            threatened = score(future)<0 and (future.calculate_potential_damage(1)>=future.p1_fingers or any(t['owner']==2 and t['type'] in ('SILENCE','GAMBLE','DESIRE','DESIRE_PLUS') for t in future.active_trumps))
+            for _ in range(2 if threatened else 1):
+                expanded=list(counter)
+                for state in counter:
+                    for card in sorted(set(state.p1_trumps)):
+                        if card[1]=='OBLIVION': continue
+                        child=play(state,1,('TRUMP',card))
+                        if child is not None: expanded.append(child)
+                        if any(t['owner']==2 and t['type'] in ('DESIRE','DESIRE_PLUS') for t in state.active_trumps):
+                            expanded.append(play(state,1,('DISCARD',card)))
+                counter=sorted(expanded,key=score,reverse=True)[:2]
             # Both stopped settles before a future response is possible.
             if not (enemy.p1_stop and enemy.p2_stop):
                 best=max(counter,key=score)
@@ -395,7 +407,8 @@ class Planner:
             return bonus
         terminal=[]
         frontier=[(worlds,())]
-        depth=min(3 if self.nightmare else 2,max(0,max_extra-extra))
+        complex_position = v.table_full or v.trump_locked or any(k in ('DESIRE','DESIRE_PLUS','SILENCE','GAMBLE','DESTROY_BLOCK') for k,val in v.enemy_effects)
+        depth=min((4 if complex_position else 3) if self.nightmare else 2,max(0,max_extra-extra))
         for level in range(depth+1):
             expanded=[]
             for states,path in frontier:
@@ -408,17 +421,21 @@ class Planner:
                     if not self.nightmare and end=='HIT':
                         value += .10 if mood=='gambler' else -.04
                     terminal.append((value+information(path),path+((end,None),)))
-                if level==depth or v.trump_locked or v.table_full: continue
+                if level==depth: continue
                 common=set(states[0][0].p1_trumps)
                 for gs,w in states[1:]: common.intersection_update(gs.p1_trumps)
                 for card in sorted(common):
                     if not path and wait_for_card and card[1] in ('DRAW_SPEC','DRAW_SPEC_PLUS','PERFECT','PERFECT_PLUS','ULTIMATE_DRAW','DEATH_DESTROY'):continue
-                    if card[1] in ('ADD','ADD_21','GAMBLE') and not self.ready_to_raise(states):continue
-                    if card[1]=='TARGET' and card[2]==states[0][0].target_score:continue
+                    # Legality belongs to the current simulated state, not the
+                    # opening snapshot: full tables can still use S-Attack,
+                    # replace a target, or discard through a trump blockade.
                     actions=[('TRUMP',card)]
-                    if len(states[0][0].p1_trumps)>=v.max_trumps or any(k in ('DESIRE','DESIRE_PLUS') for k,val in v.enemy_effects):
+                    if len(states[0][0].p1_trumps)>=v.max_trumps or any(t['owner']==2 and t['type'] in ('DESIRE','DESIRE_PLUS') for t in states[0][0].active_trumps):
                         actions.append(('DISCARD',card))
                     for action in actions:
+                        if action[0]=='TRUMP':
+                            if card[1] in ('ADD','ADD_21','GAMBLE') and not self.ready_to_raise(states):continue
+                            if card[1]=='TARGET' and card[2]==states[0][0].target_score:continue
                         children=[(play(gs,1,action),w) for gs,w in states]
                         if any(gs is None for gs,w in children): continue
                         value=self.expected(children)+information(path+(action,))

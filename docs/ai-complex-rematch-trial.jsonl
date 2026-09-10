@@ -1,0 +1,8 @@
+{"seed": 32, "seat": 1, "result": "loss", "decisions": 203, "eligible": 32, "waits": 20, "difficulty": "nightmare", "style": "swing"}
+{"seed": 32, "seat": 2, "result": "win", "decisions": 153, "eligible": 23, "waits": 17, "difficulty": "nightmare", "style": "swing"}
+{"seed": 33, "seat": 1, "result": "win", "decisions": 142, "eligible": 22, "waits": 16, "difficulty": "nightmare", "style": "swing"}
+{"seed": 33, "seat": 2, "result": "win", "decisions": 168, "eligible": 22, "waits": 13, "difficulty": "nightmare", "style": "swing"}
+{"seed": 34, "seat": 1, "result": "win", "decisions": 165, "eligible": 19, "waits": 11, "difficulty": "nightmare", "style": "swing"}
+{"seed": 34, "seat": 2, "result": "loss", "decisions": 108, "eligible": 12, "waits": 5, "difficulty": "nightmare", "style": "swing"}
+{"seed": 35, "seat": 1, "result": "win", "decisions": 225, "eligible": 35, "waits": 20, "difficulty": "nightmare", "style": "swing"}
+{"seed": 35, "seat": 2, "result": "win", "decisions": 215, "eligible": 38, "waits": 23, "difficulty": "nightmare", "style": "swing"}

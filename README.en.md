@@ -21,7 +21,7 @@ Chinese is the default; use the game's 中文 / EN button to switch. Keep the ex
 - Multiple AI difficulties and conservative, gambler and swing styles; a separate nightmare challenge uses public clues and its own hand.
 - LAN discovery, direct address, room codes and saved self-hosted servers. Room codes need a deployed server; no public server is preconfigured and automatic NAT traversal is not included. See [network setup](NETWORKING.md).
 - Editable presets, random configurations and per-field random locks. Randomisation preserves the target, which defaults to 21.
-- Time presets, unlimited timing and custom limits. Only explicit HIT / STAY grant an increment. With timing enabled, each player's first move each round has a separate 30-second preparation period; expiry forfeits the match.
+- Time presets, unlimited timing and custom limits. Only explicit HIT / STAY grant an increment. With timing enabled, each player's first move in the first round of a match has a separate 30-second preparation period; expiry forfeits the match.
 - Relative You / Opponent logs, visible showdown cards, rematch, surrender and draw offers. Manual card inspection takes priority over opponent notifications.
 
 ## Customisation
@@ -45,6 +45,8 @@ This is a fan project, unaffiliated with CAPCOM. Resident Evil names belong to t
 Source setup: Python 3.12, install `requirements.txt`, then run `python main.py`. Source files retain their development layout. Test reports remain in the repository, not the player download.
 
 ## Updates
+
+**v1.5.2**: security review fixes (a hostile host can no longer crash the client or exhaust log storage); opening preparation now belongs to the first round only, rematches inherit the preset trump count, the card is named Add 2+, and the Nightmare AI handles crowded tables better. See [v1.5.2 release notes](docs/RELEASE-v1.5.2.md).
 
 **v1.5.1**: AI matches use separate local ports to avoid startup conflicts. Add 1 / 2 now only raise the bet, without drawing a bonus trump. Harvest remains a separate effect.
 

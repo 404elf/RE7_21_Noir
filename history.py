@@ -1,17 +1,24 @@
 from app_paths import config_path as player_config, presets_path, data_path, sounds_path
 """Append-only local public match history for replaying decisions and reporting bugs."""
 from datetime import datetime
+from collections import OrderedDict
 import json
 from pathlib import Path
 import uuid
 from cards import info, english_name
 
 
+MAX_LOG_FILE=8*1024*1024
+MAX_LOG_FOLDER=64*1024*1024
+MAX_SEEN=4096
+MAX_ENTRY=8192
+
 class History:
     def __init__(self, root):
         self.path = data_path(root,'logs')/f'{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}.jsonl'
         self.entries = []
-        self.seen = set()
+        self.seen = OrderedDict()
+        self.limited = False
         self.error = False
 
     def ingest(self, state, pid=1):
@@ -21,22 +28,30 @@ class History:
             key = (match_id, entry['id'])
             if key in self.seen:
                 continue
-            self.seen.add(key)
+            self.seen[key]=None
+            if len(self.seen)>MAX_SEEN:self.seen.popitem(last=False)
             entry = dict(entry, match=match_id, viewer=pid)
             if entry['event'] == 'round_start' and 'opening' in entry:
                 entry['hands'] = [list(h) for h in entry.pop('opening')]
                 private = getattr(state,'opening_cards',{}).get(str(entry['round']))
                 if private and pid in (1,2): entry['hands'][pid-1][0] = private[pid-1]
-            new.append(entry)
+            if len(json.dumps(entry,ensure_ascii=True))<=MAX_ENTRY:new.append(entry)
         if not new:
             return
         self.entries.extend(new)
         self.entries = self.entries[-2000:]
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open('a', encoding='utf-8') as stream:
+            if self.limited:return
+            current=self.path.stat().st_size if self.path.exists() else 0
+            total=sum(p.stat().st_size for p in self.path.parent.glob('*.jsonl') if p.is_file())
+            with self.path.open('ab') as stream:
                 for entry in new:
-                    stream.write(json.dumps(entry, ensure_ascii=False)+'\n')
+                    raw=(json.dumps(entry,ensure_ascii=False)+'\n').encode('utf-8')
+                    if current+len(raw)>MAX_LOG_FILE or total+len(raw)>MAX_LOG_FOLDER:
+                        self.limited=True
+                        break
+                    stream.write(raw);current+=len(raw);total+=len(raw)
         except OSError:
             self.error = True
 

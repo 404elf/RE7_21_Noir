@@ -51,13 +51,13 @@ class PlayerRelease(unittest.TestCase):
         self.assertEqual(m.gs.round_winner,2)
         self.assertEqual(m.gs.blood_loss,{1:0,2:0})
 
-    def test_each_round_resets_preparation_not_match_bank(self):
+    def test_later_round_uses_match_bank_without_preparation(self):
         m,now=self.match(settlement_seconds=0)
         m.gs.p1_hand=[10,7];m.gs.p2_hand=[11,1]
         self.assertTrue(m.command(1,'STAY:1'));self.assertTrue(m.command(2,'STAY:1'))
         m.tick()
         self.assertEqual(m.gs.round_id,2)
-        self.assertEqual(m.preparation_pending,{1:True,2:True})
+        self.assertEqual(m.preparation_pending,{1:False,2:False})
         self.assertEqual(m.remaining,{1:303,2:303})
         self.assertEqual(m.preparation_remaining,{1:30,2:30})
 

@@ -35,10 +35,10 @@ def wait(connection, predicate, seconds=6):
 
 
 class Preservation(unittest.TestCase):
-    def test_engine_matches_reviewed_rules_after_explicit_add_reward_fix(self):
+    def test_engine_matches_reviewed_rules_after_add_and_rematch_fixes(self):
         tree=ast.parse((main.ROOT/'re7_21.py').read_text(encoding='utf-8'))
         rules=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='GameState')
-        self.assertEqual(hashlib.sha256(ast.dump(rules).encode()).hexdigest(), 'a21564506b852ce533e5afd5e39e86691a3eb70508d3d1caf483704f867c9fd8')
+        self.assertEqual(hashlib.sha256(ast.dump(rules).encode()).hexdigest(), '80f06856468425d0375a70e3a2913e8eaea55dc756888847c174ea93111ce1f3')
 
     def test_catalog_covers_every_original_card(self):
         tree = ast.parse((main.ROOT/'re7_21.py').read_text(encoding='utf-8'))

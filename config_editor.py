@@ -19,7 +19,7 @@ GAME = [
  ('max_trumps_hand_size','手持王牌上限','Trump hand limit',1,100,1,True),
  ('max_active_trumps_on_table','场上王牌上限','Table trump limit',1,100,1,True),
  ('target_score','默认目标点数','Default target',1,999,1,True),
- ('initial_trumps_count','开局王牌数量（另加 1 张）','Starting trumps (+1)',0,100,1,True),
+ ('initial_trumps_count','开局王牌数量（另加每局补充）','Starting trumps (+ round reward)',0,100,1,True),
  ('round_reward_trumps_count','每回合补充王牌','Round trump reward',0,100,1,True),
  ('hit_draw_trump_probability','抽牌时获得王牌概率（0–1）','Trump chance on hit (0–1)',0,1,.05,False),
  ('number_card_draw_probability','普通数字王牌概率（0–1）','Number trump chance (0–1)',0,1,.05,False),
@@ -33,7 +33,7 @@ TIMER = [
  ('round_seconds','每人每局秒数','Seconds per player / round',1,86400,10,False),
  ('initial_minutes','整场初始分钟','Match minutes',1,1440,1,False),
  ('increment_seconds','抽牌 / 停牌增加秒数','Increment seconds',0,300,1,False),
- ('preparation_seconds','每局首次行动准备秒数','Opening preparation seconds',1,3600,5,False),
+ ('preparation_seconds','整场首次行动准备秒数','Opening preparation seconds',1,3600,5,False),
  ('settlement_seconds','亮牌等待秒数（0 为跳过）','Reveal wait (0 skips)',0,60,.5,False),
 ]
 AUDIO = [('enabled','启用音效','Enable sound','bool')]+[(k,zh,en,0,1,.05,False) for k,zh,en in [

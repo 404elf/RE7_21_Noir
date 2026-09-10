@@ -58,7 +58,7 @@ class Match:
 
     def record(self, event, pid=0, **details):
         if event == 'round_start':
-            self.preparation_pending={1:True,2:True}
+            self.preparation_pending={1:self.gs.round_id==1,2:self.gs.round_id==1}
             self.preparation_remaining={1:self.timer['preparation_seconds'],2:self.timer['preparation_seconds']}
             openings = dict(getattr(self.gs,'opening_cards',{}))
             openings[str(self.gs.round_id)] = [self.gs.p1_hand[0],self.gs.p2_hand[0]]

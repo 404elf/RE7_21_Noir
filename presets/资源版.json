@@ -13,7 +13,7 @@
     "_comment_target": "游戏的目标点数 (默认为21)",
     "target_score": 21,
 
-    "_comment_init": "开局时双方获得的王牌数量 (实际数量 = 此数值 + 1)",
+    "_comment_init": "开局时双方获得的王牌数量 (实际数量 = 此数值 + 每回合奖励，受手牌上限限制)",
     "initial_trumps_count": 6,
 
     "_comment_reward": "每回合开始时，双方自动获得的王牌奖励数量",

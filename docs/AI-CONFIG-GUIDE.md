@@ -14,7 +14,7 @@
 
 默认目标固定 21、牌堆固定 1–11，除非玩家明确要求改变。相同数字不会重复。不要擅自改变这三个参数来制造难度。优先温和调整，避免所有功能牌权重为 0。不开启玩家未要求的高风险牌。不要写入计时、音效、网络、文件路径或测试结果；这些由游戏的独立设置管理。
 
-`initial_trumps_count` 的实际起手数量为此值 + 1。`number_card_draw_probability` 是纯数字王牌出现概率；其余概率按功能牌权重分配。纯数字王牌通过该概率管理，不要在 `trump_weights` 中添加 Two、Three 等纯数字键。权重 0 表示禁用，越大越常见；权重不必相加为 100。
+实际起手数量为 `initial_trumps_count + round_reward_trumps_count`，不超过 `max_trumps_hand_size`；首次开局和再来一局使用同一规则。`number_card_draw_probability` 是纯数字王牌出现概率；其余概率按功能牌权重分配。纯数字王牌通过该概率管理，不要在 `trump_weights` 中添加 Two、Three 等纯数字键。权重 0 表示禁用，越大越常见；权重不必相加为 100。
 
 ## 对局参数
 
@@ -24,7 +24,7 @@
 | `max_trumps_hand_size` | 手持王牌上限 | 1–100，整数 |
 | `max_active_trumps_on_table` | 场上王牌上限 | 1–100，整数 |
 | `target_score` | 默认目标点数 | 1–999，整数 |
-| `initial_trumps_count` | 开局王牌数量（另加 1 张） | 0–100，整数 |
+| `initial_trumps_count` | 开局王牌数量（另加每局补充） | 0–100，整数 |
 | `round_reward_trumps_count` | 每回合补充王牌 | 0–100，整数 |
 | `hit_draw_trump_probability` | 抽牌时获得王牌概率（0–1） | 0–1 |
 | `number_card_draw_probability` | 普通数字王牌概率（0–1） | 0–1 |

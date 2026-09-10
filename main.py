@@ -1110,7 +1110,7 @@ class App:
                     label=self.t(zh,en)
                     self.text(label,x+(370-self.font(19).size(label)[0])//2,y+68,19,MUTED)
             self.text(self.t('当前：','Current: ')+self.clock_label(),136,737,21,GOLD)
-            self.wrap(self.t('启用计时后，每局首次行动各有准备时间（默认 30 秒），超时判负。只有抽牌、停牌加秒。','Each round begins with 30 seconds to make your first move; expiry loses the match. Only HIT / STAY earn an increment.'),pg.Rect(136,778,1140,55),17)
+            self.wrap(self.t('启用计时后，仅第一局双方首次行动前各有准备时间（默认 30 秒），超时判负。后续局不再准备；只有抽牌、停牌加秒。','Only the first round has opening preparation (30 seconds by default) for each player; expiry loses the match. Later rounds use the main clock. Only HIT / STAY earn an increment.'),pg.Rect(136,778,1140,55),17)
         elif self.overlay == 'history':
             entries = list(reversed(self.history.entries))
             pages = max(1, (len(entries)+11)//12)
@@ -1122,7 +1122,8 @@ class App:
                 self.text(describe(entry, self.zh, self.pid), 210, y, 18, INK, width=1080)
             if not entries:
                 self.text(self.t('暂无日志；需要新版房主提供对局记录。', 'No history yet. A current host is needed to provide action logs.'), 138, 236, 20, MUTED)
-            self.text(self.t('日志保存失败；本次记录仍可在这里查看。', 'Could not save the file; history remains available here.') if self.history.error else self.t('日志自动保存，可随问题反馈附上：'+str(self.history.path.parent.relative_to(self.data_root)), 'Logs saved for bug reports: '+str(self.history.path.parent.relative_to(self.data_root))), 138, 696, 16, RED if self.history.error else MUTED)
+            log_note = self.t('日志已达容量上限；仍可查看近期记录。','Log storage limit reached; recent events remain visible.') if self.history.limited else self.t('日志保存失败；本次记录仍可在这里查看。', 'Could not save the file; recent history remains visible.') if self.history.error else self.t('日志自动保存，可随问题反馈附上：','Logs saved for bug reports: ')+str(self.history.path.parent.relative_to(self.data_root))
+            self.text(log_note,138,696,16,RED if self.history.error else MUTED)
             self.button((136, 758, 150, 46), self.t('上一页', 'Previous'), 'log_prev', enabled=self.log_page > 0)
             self.text(f'{self.log_page+1} / {pages}', 322, 770, 17, GOLD)
             self.button((1153, 758, 150, 46), self.t('下一页', 'Next'), 'log_next', enabled=self.log_page+1 < pages)

@@ -22,7 +22,7 @@ for row in [
     ('Destroy+', '破坏+', 'control', '移除对手所有场上王牌。', 'Remove all opponent trumps on the table.'),
     ('Destroy++', '破坏++', 'control', '移除对手场上所有王牌。此牌在场时，对手不能使用王牌。', 'Clear and lock opponent trumps.'),
     ('Return', '归还', 'control', '将你最后抽到的一张明牌放回牌堆。', 'Return your last face-up number card to the deck.'),
-    ('ADD2+', '归还+', 'attack', '将对手最后一张明牌放回牌堆。此牌在场时，对手的赌注增加 2。', 'Return the opponent’s last face-up card. While in play, raise your opponent’s bet by 2.'),
+    ('ADD2+', '加注2+', 'attack', '将对手最后一张明牌放回牌堆。此牌在场时，对手的赌注增加 2。', 'Return the opponent’s last face-up card. While in play, raise your opponent’s bet by 2.'),
     ('Remove', '移除', 'control', '将对手最后抽到的一张明牌放回牌堆。', 'Return the opponent’s last face-up number card to the deck.'),
     ('Perfect', '完美抽牌', 'draw', '抽出对你最有利的一张牌。没有安全的牌时，抽出点数最小的一张。', 'Draw the best safe number; if none is safe, draw the smallest.'),
     ('Perfect+', '完美抽牌+', 'draw', '抽出对你最有利的一张牌。此牌在场时，对手的赌注增加 5。', 'Perform a perfect draw. While in play, raise your opponent’s bet by 5.'),
