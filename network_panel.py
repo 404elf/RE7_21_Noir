@@ -1,3 +1,4 @@
+from app_paths import config_path as player_config, presets_path, data_path, sounds_path
 """Network choices and user-owned server preferences; no auto-connect on discovery."""
 import json
 import os
@@ -13,7 +14,7 @@ class NetworkPanel:
         self.root=Path(root);self.mode='lan';self.editing=None;self.replace=True
         self.values=dict(server='',address='127.0.0.1:6666',code='',password='')
         self.favorites=[];self.found=[];self.scanning=False;self.message=''
-        path=self.root/'network.json'
+        path=player_config(self.root,'network.json')
         self.original=path.read_bytes() if path.exists() else None
         if self.original:
             try:
@@ -25,15 +26,15 @@ class NetworkPanel:
 
     def save(self):
         endpoint(self.values['server'],7443)
-        path=self.root/'network.json'
+        path=player_config(self.root,'network.json')
         if (path.read_bytes() if path.exists() else None)!=self.original: raise ValueError('配置已被外部修改，请重启后再保存')
         if self.values['server'] not in self.favorites: self.favorites=(self.favorites+[self.values['server']])[-12:]
         data=json.dumps(dict(server=self.values['server'],address=self.values['address'],favorites=self.favorites),ensure_ascii=False,indent=2).encode('utf-8')
         if self.original:
-            folder=self.root/'config-backups';folder.mkdir(exist_ok=True)
+            folder=data_path(self.root,'config-backups');folder.mkdir(parents=True,exist_ok=True)
             backup=folder/('network-'+uuid.uuid4().hex+'.json');backup.write_bytes(self.original)
             if backup.read_bytes()!=self.original: raise OSError('Backup failed')
-        fd,temp=tempfile.mkstemp(dir=self.root,prefix='network-',suffix='.tmp')
+        fd,temp=tempfile.mkstemp(dir=path.parent,prefix='network-',suffix='.tmp')
         try:
             with os.fdopen(fd,'wb') as f: f.write(data);f.flush();os.fsync(f.fileno())
             os.replace(temp,path)

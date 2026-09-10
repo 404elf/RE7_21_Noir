@@ -1,0 +1,17 @@
+﻿RE7 / 21 — 禁止公开的录像
+
+1. 先解压整个压缩包，再双击 RE7_21_Noir.exe。不要只复制 exe。
+2. 选“人机对战”即可玩。联机双方请使用同一版本。
+3. 在大厅点“游戏配置”改规则、王牌权重、音量；点“计时设置”选时间。
+4. 自定义文件都在 custom 文件夹：
+   game：当前对局规则；presets：可选择的玩法预设；
+   timer：计时与亮牌等待；audio：音效和音量；network：联机与更新配置。
+5. 想让聊天 AI 帮你配玩法？打开 docs/AI-CONFIG-GUIDE.md，照说明复制给 AI。
+6. 日志、配置备份、更新文件在 userdata；更多联机说明在 docs/NETWORKING.md。
+7. 大厅“手动更新”可检查新版；也可重新下载完整压缩包。旧目录会保留。
+
+反馈邮箱：1543738958@qq.com
+反馈时可附版本号、截图和 userdata/logs 中的本场日志。
+
+Start: extract the whole archive, then double-click RE7_21_Noir.exe.
+Choose 中文 / EN in the game to switch language. Custom files: custom/.

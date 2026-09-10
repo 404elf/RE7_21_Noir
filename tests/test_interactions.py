@@ -36,7 +36,7 @@ class InteractionTests(unittest.TestCase):
         m.command(1, f'DRAW_OFFER:{m.gs.round_id}')
         c.advance(61)
         self.assertFalse(m.command(2, f'DRAW_ACCEPT:{m.gs.round_id}'))
-        self.assertEqual(m.gs.end_reason, 'timeout')
+        self.assertEqual(m.gs.end_reason, 'preparation_timeout')
 
     def test_settlement_zero_default_and_custom(self):
         for delay in (0, 1, 3.5):

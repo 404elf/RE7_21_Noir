@@ -15,6 +15,8 @@ import json
 
 os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 import pygame as pg
+from app_paths import migrate_legacy, config_path as player_config
+if getattr(sys,'frozen',False): migrate_legacy(Path(sys.executable).parent)
 import re7_21 as engine
 from re7_21 import GameState
 from cards import CARDS, CATEGORIES, info, english_name
@@ -198,6 +200,7 @@ class App:
         self.notice = None
         self.notice_queue = []
         self.notice_cursor = None
+        self.detail_manual = False
         self.book_page = 0
         self.book_selected = None
         self.error = ''
@@ -222,8 +225,9 @@ class App:
             return self.t('不限时', 'No clock')
         mode = self.timer['mode']
         if mode == 'fischer':
-            return f'{self.timer["initial_minutes"]:g}+{self.timer["increment_seconds"]:g}'
+            return '∞' if self.timer['initial_minutes'] is None else f'{self.timer["initial_minutes"]:g}+{self.timer["increment_seconds"]:g}'
         seconds = self.timer[mode+'_seconds']
+        if seconds is None: return self.t('不限时','Unlimited')
         return self.t(f'{seconds:g} 秒 / '+('行动' if mode == 'turn' else '每人每局'), f'{seconds:g}s / '+('turn' if mode == 'turn' else 'player per round'))
 
     def font(self, size, bold=False):
@@ -474,7 +478,7 @@ class App:
         self.text(hidden_note, 237, 575, 14, MUTED)
         recent = next((entry for entry in reversed(getattr(gs, 'action_log', [])) if entry['round'] == gs.round_id and entry['event'] in ('trump', 'discard', 'hit', 'stay', 'timeout')), None)
         if recent:
-            message = describe(recent, self.zh)
+            message = describe(recent, self.zh, self.pid)
             for player in (1, 2):
                 message = message.replace(f'玩家 {player}' if self.zh else f'Player {player}', self.t('你', 'You') if player == self.pid else self.t('对手', 'Opponent'))
             self.text(self.t('最近：', 'Latest: ')+message, 237, 600, 16, GOLD, width=558)
@@ -483,12 +487,15 @@ class App:
         if getattr(gs, 'clock_config', {}).get('enabled'):
             elapsed = 0 if getattr(gs,'network_paused',False) or self.net_status else min(2, max(0, time.monotonic()-self.state_received_at))
             for pid, y in ((3-self.pid, 270), (self.pid, 555)):
-                seconds = max(0, remaining.get(pid, 0)-(elapsed if active == pid else 0))
-                color = RED if seconds < 10 else INK if active == pid else MUTED
-                self.text(f'{int(seconds)//60:02}:{int(seconds)%60:02}', 838, y-3, 30, color)
-                pg.draw.line(self.canvas, (91, 34, 28) if active == pid else LINE, (840, y+36), (973, y+36), 2)
-                if active == pid:
-                    pg.draw.circle(self.canvas, RED, (986, y+15), 3)
+                preparing = getattr(gs,'preparation_active',0)==pid
+                budget = getattr(gs,'preparation_remaining',{}).get(pid) if preparing else remaining.get(pid)
+                ticking = preparing or active==pid
+                seconds = None if budget is None else max(0,budget-(elapsed if ticking else 0))
+                color = RED if seconds is not None and seconds<10 else INK if ticking else MUTED
+                label = '∞' if seconds is None else f'{int(seconds)//60:02}:{int(seconds)%60:02}'
+                self.text(label,838,y-3,30,color)
+                if preparing: self.text(self.t('准备','READY'),930,y+6,15,GOLD)
+                pg.draw.line(self.canvas, (91,34,28) if ticking else LINE,(840,y+36),(973,y+36),2)
         if getattr(gs, 'draw_offer', 0) == 3-self.pid:
             self.button((460, 96, 325, 43), self.t('对手申请平局 · 查看', 'Draw offered · respond'), 'match_options', True)
         self.sidebar()
@@ -539,7 +546,8 @@ class App:
                 self.notice = None
             for entry in entries:
                 if entry['id'] > cursor[1] and entry['round'] == state.round_id and entry['event'] == 'trump' and entry['pid'] == 3-self.pid:
-                    self.notice_queue.append(entry['card'])
+
+                    if not self.detail_manual: self.notice_queue.append(entry['card'])
             self.notice_queue = self.notice_queue[-12:]
         elif cursor:
             self.notice_queue = []
@@ -589,7 +597,7 @@ class App:
         if getattr(gs, 'last_result', None) and self.selected is not None:
             self.button((1220, 502, 170, 35), self.t('回看上一局', 'Last round'), 'last_result')
         trumps = getattr(gs, f'p{self.pid}_trumps')
-        if self.notice and gs.phase == 'ACTION':
+        if self.notice and not self.detail_manual and gs.phase == 'ACTION':
             name = self.notice[0]
             zh, cat, desc, en = info(name)
             self.text(self.t('对手打出了王牌', 'OPPONENT PLAYED'), 1056, 513, 18, RED, True)
@@ -670,7 +678,7 @@ class App:
         reason = getattr(gs, 'end_reason', '')
         special_end = self.solo and self.difficulty == 'nightmare' and gs.phase == 'GAMEOVER' and gs.round_winner
         if reason and not special_end:
-            label = {'surrender': ('投降结束', 'SURRENDER'), 'agreement': ('双方同意平局', 'DRAW AGREED'), 'timeout': ('总时间耗尽', 'TIME FORFEIT')}.get(reason, ('', ''))
+            label = {'surrender': ('投降结束', 'SURRENDER'), 'agreement': ('双方同意平局', 'DRAW AGREED'), 'timeout': ('总时间耗尽', 'TIME FORFEIT'), 'preparation_timeout': ('准备超时', 'PREPARATION EXPIRED')}.get(reason, ('', ''))
             self.text(self.t(*label), 1056, 362, 24, GOLD, True, 326)
         elif gs.round_damage and not special_end:
             self.text(self.t('本局扣血', 'ROUND DAMAGE'), 1056, 355, 17, MUTED)
@@ -812,15 +820,18 @@ class App:
         if latest:
             if self.gs and latest.round_id != self.gs.round_id:
                 self.effect_page = 0
+                self.detail_manual = False
                 self.effect_selected = None
-            if self.effect_selected and not any(card['name'] == self.effect_selected for card in latest.active_trumps):
+            if not self.detail_manual and self.effect_selected and not any(card['name'] == self.effect_selected for card in latest.active_trumps):
                 self.effect_selected = None
             self.state_received_at = time.monotonic()
             token = (latest.round_id, tuple(getattr(latest, f'p{self.pid}_trumps')))
             if token != self.selection_token or latest.phase != 'ACTION' or latest.turn != self.pid:
                 self.drag = None
             if token != self.selection_token:
-                self.selected = None
+                prior = getattr(self.gs, f'p{self.pid}_trumps', []) if self.gs else []
+                card = prior[self.selected] if self.selected is not None and self.selected < len(prior) else None
+                self.selected = token[1].index(card) if self.detail_manual and card in token[1] and self.gs.round_id == latest.round_id else None
                 self.selection_token = token
             self.animate_state(self.gs, latest)
             self.gs = latest
@@ -859,6 +870,8 @@ class App:
             try:
                 if self.editor is None:
                     self.editor = ConfigEditor(self.data_root, engine.GAME_CONFIG)
+                self.editor.timer_only = False
+                if self.editor.tab == 'timer': self.editor.tab = 'game'
                 self.overlay = 'config'
             except (OSError, ValueError) as exc:
                 self.error = str(exc)
@@ -900,7 +913,7 @@ class App:
             self.effect_selected = None
             return
         if action == 'close_overlay':
-            self.overlay = None
+            self.overlay = 'timers' if self.overlay=='config' and self.editor and self.editor.timer_only else None
             return
         if action == 'check_update':
             self.updater.start()
@@ -927,9 +940,14 @@ class App:
         if isinstance(action, tuple):
             kind, value = action
             if kind == 'effect':
+                self.detail_manual = True
+                self.notice = None
+                self.notice_queue.clear()
+                self.selected = None
                 self.effect_selected = value
                 self.review_result = False
             elif kind == 'select':
+                self.detail_manual = True
                 self.notice = None
                 self.notice_queue.clear()
                 self.effect_selected = None
@@ -942,16 +960,22 @@ class App:
             elif kind == 'style':
                 self.style = value
             elif kind == 'timer':
-                config = load_timer(self.data_root)
-                presets = {
-                    'off': dict(enabled=False), '30s': dict(enabled=True, mode='turn', turn_seconds=30),
-                    '60s': dict(enabled=True, mode='turn', turn_seconds=60),
-                    '3+3': dict(enabled=True, mode='fischer', initial_minutes=3, increment_seconds=3),
-                    '5+3': dict(enabled=True, mode='fischer', initial_minutes=5, increment_seconds=3),
-                }
-                config.update(presets.get(value, {}))
-                self.timer = timer_config(config)
-                self.overlay = None
+                if self.editor is None: self.editor = ConfigEditor(self.data_root, engine.GAME_CONFIG)
+                self.editor.timer_only = True
+                self.editor.tab, self.editor.page = 'timer', 0
+                if value == 'custom':
+                    self.overlay = 'config'
+                else:
+                    config = dict(self.timer)
+                    if value == 'off': config['enabled'] = False
+                    else:
+                        minutes, increment = map(int,value.split('+'))
+                        config.update(enabled=True,mode='fischer',initial_minutes=minutes,increment_seconds=increment,preparation_seconds=30)
+                    self.editor.docs['timer.json'] = timer_config(config)
+                    try:
+                        self.editor.save()
+                        self.timer = load_timer(self.data_root)
+                    except (ValueError,OSError) as exc: self.error=str(exc)
             return
         if action == 'language':
             self.zh = not self.zh
@@ -1067,15 +1091,20 @@ class App:
             self.button((136, 705, 520, 60), self.t('返回大厅 / 断开连接', 'Leave and disconnect'), 'menu')
         elif self.overlay == 'timers':
             self.wrap(self.t('房主统一计时；选择后用于下一场对局。双方入座才开始，结算时暂停。', 'The host controls the clock for the next match. Waiting and settlement do not consume time.'), pg.Rect(136, 145, 1120, 62), 19)
-            options = [('off', '不限时', 'No clock'), ('30s', '每次行动 30 秒', '30 seconds per turn'),
-                       ('60s', '每次行动 60 秒', '60 seconds per turn'), ('3+3', '3 分钟 + 3 秒', '3 minutes + 3 seconds'),
-                       ('5+3', '5 分钟 + 3 秒', '5 minutes + 3 seconds'), ('custom', '读取 timer.json 自定义', 'Load custom timer.json')]
-            for i, (key, zh, en) in enumerate(options):
-                self.button((136+(i%2)*584, 244+(i//2)*105, 558, 80), self.t(zh, en), ('timer', key))
-            self.text(self.t('结算等待：', 'Settlement: ')+f"{self.timer['settlement_seconds']:g}s · timer.json / settlement_seconds (0–60)", 136, 565, 17, MUTED)
-            mode = self.timer['mode'] if self.timer['enabled'] else 'off'
-            self.text(self.t('当前设置：', 'Current: ')+self.clock_label(), 136, 601, 22, GOLD)
-            self.wrap(self.t('单次行动 / 每局额度耗尽：自动停牌。总时间耗尽：整场判负。\n3+3 表示每人整场 3 分钟，抽牌或停牌交接后加 3 秒。使用、弃置王牌不加秒。\ntimer.json 还可设置每位玩家每局独立时间额度（round）。', 'Turn or per-round timeout: automatic stay. Fischer timeout: match loss.\n3+3 gives each player 3 minutes, plus 3 seconds after handing over with HIT or STAY. Trumps and discards earn no increment.\nUse timer.json for custom times and per-round budgets.'), pg.Rect(136, 650, 1140, 155), 18)
+            options = [('1+0','子弹牌','Bullet'),('2+1','子弹牌','Bullet'),('3+0','超快牌','Blitz'),
+                       ('3+2','超快牌','Blitz'),('5+0','超快牌','Blitz'),('5+3','超快牌','Blitz'),
+                       ('10+0','快牌','Rapid'),('10+5','快牌','Rapid'),('15+10','快牌','Rapid'),
+                       ('30+0','慢牌','Classical'),('off','不限时','Unlimited'),('custom','自定义','Custom')]
+            for i,(key,zh,en) in enumerate(options):
+                x,y=136+(i%3)*390,216+(i//3)*126
+                self.button((x,y,370,112),'',('timer',key),primary=self.clock_label()==key)
+                label=key if '+' in key else self.t(zh,en)
+                self.text(label,x+(370-self.font(31).size(label)[0])//2,y+19,31,INK)
+                if '+' in key:
+                    label=self.t(zh,en)
+                    self.text(label,x+(370-self.font(19).size(label)[0])//2,y+68,19,MUTED)
+            self.text(self.t('当前：','Current: ')+self.clock_label(),136,737,21,GOLD)
+            self.wrap(self.t('启用计时后，每局首次行动各有准备时间（默认 30 秒），超时判负。只有抽牌、停牌加秒。','Each round begins with 30 seconds to make your first move; expiry loses the match. Only HIT / STAY earn an increment.'),pg.Rect(136,778,1140,55),17)
         elif self.overlay == 'history':
             entries = list(reversed(self.history.entries))
             pages = max(1, (len(entries)+11)//12)
@@ -1084,10 +1113,10 @@ class App:
             for i, entry in enumerate(entries[self.log_page*12:self.log_page*12+12]):
                 y = 191+i*40
                 self.text(f'R{entry["round"]:02}', 138, y, 16, GOLD)
-                self.text(describe(entry, self.zh), 210, y, 18, INK, width=1080)
+                self.text(describe(entry, self.zh, self.pid), 210, y, 18, INK, width=1080)
             if not entries:
                 self.text(self.t('暂无日志；需要新版房主提供对局记录。', 'No history yet. A current host is needed to provide action logs.'), 138, 236, 20, MUTED)
-            self.text(self.t('日志保存失败；本次记录仍可在这里查看。', 'Could not save the file; history remains available here.') if self.history.error else self.t('自动保存到游戏目录的 logs 文件夹，可随问题反馈附上。', 'Automatically saved in the game’s logs folder for bug reports.'), 138, 696, 16, RED if self.history.error else MUTED)
+            self.text(self.t('日志保存失败；本次记录仍可在这里查看。', 'Could not save the file; history remains available here.') if self.history.error else self.t('日志自动保存，可随问题反馈附上：'+str(self.history.path.parent.relative_to(self.data_root)), 'Logs saved for bug reports: '+str(self.history.path.parent.relative_to(self.data_root))), 138, 696, 16, RED if self.history.error else MUTED)
             self.button((136, 758, 150, 46), self.t('上一页', 'Previous'), 'log_prev', enabled=self.log_page > 0)
             self.text(f'{self.log_page+1} / {pages}', 322, 770, 17, GOLD)
             self.button((1153, 758, 150, 46), self.t('下一页', 'Next'), 'log_next', enabled=self.log_page+1 < pages)
@@ -1110,7 +1139,7 @@ class App:
                           'missing_digest': ('该下载没有 SHA-256 校验值，已停止更新。', 'The asset has no SHA-256 digest. Update stopped.'),
                           'checksum_failed': ('下载文件校验失败，旧版本未改动。', 'Checksum failed. The old version was not modified.')}
                 self.wrap(self.t(*errors.get(self.updater.error, ('请检查网络、公开仓库和 Release 配置后重试。', 'Check your network, public repository and release configuration, then retry.'))), pg.Rect(138, 330, 1120, 95), 20, RED)
-            self.wrap(self.t('下载源由 updates.json 指定。更新会校验 GitHub 提供的 SHA-256，并安装到独立的新目录。\n自动保留游戏、计时、声音、更新配置及 sounds 文件。新版本默认配置另存为 package-defaults。\n原程序与旧配置不被覆盖；更新失败时仍可继续使用当前版本。', 'The download source is set in updates.json. Archives are verified against GitHub’s SHA-256 and installed into a separate folder.\nGame, clock, audio and update settings and sounds are preserved. New defaults are kept in package-defaults.\nThe current program is never overwritten and remains usable if an update fails.'), pg.Rect(138, 471, 1125, 178), 19)
+            self.wrap(self.t('下载源由 updates.json 指定。更新会校验 GitHub 提供的 SHA-256，并安装到独立的新目录。\n自动保留游戏、计时、声音、更新配置及 sounds 文件。新版本默认配置另存于 userdata/package-defaults。\n原程序与旧配置不被覆盖；更新失败时仍可继续使用当前版本。', 'The download source is set in updates.json. Archives are verified against GitHub’s SHA-256 and installed into a separate folder.\nGame, clock, audio and update settings and sounds are preserved. New defaults are kept in userdata/package-defaults.\nThe current program is never overwritten and remains usable if an update fails.'), pg.Rect(138, 471, 1125, 178), 19)
             self.button((138, 711, 300, 61), self.t('检查更新', 'Check for updates'), 'check_update', enabled=not self.updater.busy)
             if self.updater.status == 'available':
                 self.button((462, 711, 400, 61), self.t('下载并准备新版', 'Download and prepare'), 'download_update', True)
@@ -1122,7 +1151,7 @@ class App:
         self.motion.prune()
         if self.notice and time.monotonic() >= self.notice[1]:
             self.notice = None
-        if not self.notice and self.notice_queue:
+        if not self.detail_manual and not self.notice and self.notice_queue:
             self.notice = (self.notice_queue.pop(0), time.monotonic()+4)
         self.buttons = []
         self.canvas.blit(self.theme.background, (0, 0))

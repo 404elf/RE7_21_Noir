@@ -1,3 +1,4 @@
+from app_paths import config_path as player_config, presets_path, data_path, sounds_path
 import pygame
 import socket
 import threading
@@ -30,7 +31,7 @@ def load_config():
             # 如果是 python 脚本，使用 脚本 所在目录
             base_dir = os.path.dirname(os.path.abspath(__file__))
             
-        config_path = os.path.join(base_dir, "config.json")
+        config_path = player_config(base_dir, "config.json")
         
         # print(f"Looking for config at: {config_path}") # 调试用，打包后看不到控制台可以注释掉
 

@@ -98,6 +98,17 @@ def score(gs):
 
 class Planner:
     @staticmethod
+    def number_draw_pending(v):
+        # Do not replan a successful targeted draw into a blind draw in the
+        # same turn. Failed probes and a card already returned are different.
+        for event in reversed(v.events):
+            _,actor,action,kind,number,before,opp,after,after_opp,target,locked=event
+            if actor==2 or action in ('hit','stay'):break
+            if kind in ('DRAW_SPEC','DRAW_SPEC_PLUS') and len(after)>len(before):
+                return number in v.hand[1:] and len(v.hand)-1>len(before)
+        return False
+
+    @staticmethod
     def certainly_ahead(v):
         """A current win for EVERY possible hole card, not just likely samples.
 
@@ -352,6 +363,7 @@ class Planner:
         baseline=self.expected(worlds)
         belief=self.infer(v)
         wait_for_card=self.certainly_ahead(v)
+        avoid_blind_draw = wait_for_card or self.number_draw_pending(v)
         probe=self.protected_probe(v,belief,extra)
         if probe: return probe
         stay_value,draw_value=self.draw_values(v,belief)
@@ -367,7 +379,7 @@ class Planner:
         # Safe low-total draws preserve targeted/target-changing trumps for when
         # the extra information makes them useful. Emergency protection above
         # remains possible when handing over exposes lethal damage.
-        if not wait_for_card and not v.draw_locked and v.deck_count and belief and sum(v.hand)+max(belief)<=v.target and sum(v.hand)<v.target*.75 and stay_value<.8:
+        if not avoid_blind_draw and not v.draw_locked and v.deck_count and belief and sum(v.hand)+max(belief)<=v.target and sum(v.hand)<v.target*.75 and stay_value<.8:
             self.last_plan=(('HIT',None),)
             return 'HIT'
         def information(path):
@@ -388,7 +400,7 @@ class Planner:
             expanded=[]
             for states,path in frontier:
                 for end in ('STAY','HIT'):
-                    if end=='HIT' and not path and wait_for_card: continue
+                    if end=='HIT' and not path and avoid_blind_draw: continue
                     if end=='HIT' and (v.draw_locked or any(not legal(gs,1) for gs,w in states)): continue
                     after=[(play(gs,1,(end,None)),w) for gs,w in states]
                     # Holding has a future opponent turn too, unless both stopped.
@@ -433,7 +445,7 @@ class Planner:
                 if card[1] in ('ADD','ADD_21','GAMBLE'):continue
                 if card[1]=='TARGET' and sum(v.hand)<=v.target:continue
                 if card[1]=='RETURN' and sum(v.hand)<=v.target:continue
-                if card[1] in ('DRAW_SPEC','DRAW_SPEC_PLUS') and sum(v.hand)+max(belief,default=0)<=v.target:continue
+                if card[1] in ('DRAW_SPEC','DRAW_SPEC_PLUS'):continue
             filtered.append((value,path))
         terminal=filtered
         value,path=max(terminal,key=lambda item:item[0])
@@ -442,11 +454,11 @@ class Planner:
         if action in ('TRUMP','DISCARD'): return f'{action}:{v.trumps.index(card)}'
         # In particular, after Return or a failed number probe, do not accept a
         # likely loss merely because one draw alone may still leave us behind.
-        if action=='STAY' and not v.draw_locked and v.deck_count and sum(v.hand)<=v.target and stay_value<0 and draw_value>stay_value+.03:
+        if action=='STAY' and not avoid_blind_draw and not v.draw_locked and v.deck_count and sum(v.hand)<=v.target and stay_value<0 and draw_value>stay_value+.03:
             self.last_plan=(('HIT',None),)
             return 'HIT'
         raised=any(owner==1 and kind in ('ADD','ADD_21','GAMBLE') for owner,name,kind,value,counter in v.table)
-        if not wait_for_card and not self.nightmare and mood=='gambler' and action=='STAY' and not (raised and stay_value>=0) and not v.opponent_stopped and not v.draw_locked and v.deck_count and sum(v.hand)<v.target:
+        if not avoid_blind_draw and not self.nightmare and mood=='gambler' and action=='STAY' and not (raised and stay_value>=0) and not v.opponent_stopped and not v.draw_locked and v.deck_count and sum(v.hand)<v.target:
             pool=tuple(self.infer(v))
             if pool and sum(sum(v.hand)+n>v.target for n in pool)/len(pool)<=.75 and self.rng.random()<.32:
                 return 'HIT'

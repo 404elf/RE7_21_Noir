@@ -29,7 +29,7 @@ class Feedback(unittest.TestCase):
             editor.action(('cfg','field',0));editor.buffer='17';editor.save()
             self.assertEqual(json.loads((root/'config.json').read_text(encoding='utf-8'))['game_settings']['max_hp'],17)
             editor.action(('cfg','tab','presets'));editor.action(('cfg','save_preset',None))
-            self.assertEqual(len(editor.presets),6)
+            self.assertEqual(len(editor.presets),len(list((main.ROOT/'presets').glob('*.json')))+1)
             self.assertEqual(json.loads((root/'presets'/ (editor.preset_name+'.json')).read_text(encoding='utf-8'))['game_settings']['max_hp'],17)
             editor.action(('cfg','tab','audio'));editor.action(('cfg','quiet_audio',None));editor.save()
             self.assertTrue(all((main.ROOT/e['file']).exists() for e in editor.docs['audio.json']['events'].values()))

@@ -1,3 +1,4 @@
+from app_paths import config_path as player_config, presets_path, data_path, sounds_path
 """Session orchestration: unchanged card engine plus authoritative clocks and history."""
 import json
 import math
@@ -8,7 +9,8 @@ import re7_21 as engine
 from cards import CARDS
 from presentation_rules import enabled_cards
 
-DEFAULT_TIMER = dict(enabled=False, mode='turn', turn_seconds=30., round_seconds=120., initial_minutes=3., increment_seconds=3., settlement_seconds=3.)
+DEFAULT_TIMER = dict(enabled=False, mode='turn', turn_seconds=30., round_seconds=120., initial_minutes=3., increment_seconds=3., settlement_seconds=3., preparation_seconds=30.)
+UNLIMITED_TIMER_FIELDS = {'turn_seconds','round_seconds','initial_minutes','preparation_seconds'}
 
 
 def timer_config(value):
@@ -17,8 +19,11 @@ def timer_config(value):
         return config
     config['enabled'] = value.get('enabled') is True
     config['mode'] = value.get('mode') if value.get('mode') in ('turn', 'round', 'fischer') else 'turn'
-    for key, limit in [('turn_seconds', 3600), ('round_seconds', 86400), ('initial_minutes', 1440), ('increment_seconds', 300), ('settlement_seconds', 60)]:
+    for key, limit in [('turn_seconds', 3600), ('round_seconds', 86400), ('initial_minutes', 1440), ('increment_seconds', 300), ('settlement_seconds', 60), ('preparation_seconds',3600)]:
         number = value.get(key, config[key])
+        if number is None and key in UNLIMITED_TIMER_FIELDS:
+            config[key]=None
+            continue
         if isinstance(number, (int, float)) and not isinstance(number, bool) and math.isfinite(number):
             config[key] = max(0 if key in ('increment_seconds', 'settlement_seconds') else 1, min(limit, number))
     return config
@@ -26,7 +31,7 @@ def timer_config(value):
 
 def load_timer(root):
     try:
-        return timer_config(json.loads((Path(root)/'timer.json').read_text(encoding='utf-8-sig')))
+        return timer_config(json.loads((player_config(root,'timer.json')).read_text(encoding='utf-8-sig')))
     except (OSError, ValueError):
         return dict(DEFAULT_TIMER)
 
@@ -53,6 +58,8 @@ class Match:
 
     def record(self, event, pid=0, **details):
         if event == 'round_start':
+            self.preparation_pending={1:True,2:True}
+            self.preparation_remaining={1:self.timer['preparation_seconds'],2:self.timer['preparation_seconds']}
             openings = dict(getattr(self.gs,'opening_cards',{}))
             openings[str(self.gs.round_id)] = [self.gs.p1_hand[0],self.gs.p2_hand[0]]
             self.gs.opening_cards = dict(list(openings.items())[-80:])
@@ -63,20 +70,24 @@ class Match:
 
     def reset_clock(self):
         mode = self.timer['mode']
-        amount = self.timer['initial_minutes']*60 if mode == 'fischer' else self.timer[mode+'_seconds']
-        self.remaining = {1: float(amount), 2: float(amount)}
+        amount = self.timer['initial_minutes'] if mode=='fischer' else self.timer[mode+'_seconds']
+        amount = None if amount is None else float(amount)*(60 if mode=='fischer' else 1)
+        self.remaining = {1: amount, 2: amount}
 
     def publish(self):
         for pid in (1, 2):
             hp = max(0, getattr(self.gs, f'p{pid}_fingers'))
-            if self.gs.end_reason != 'timeout':
+            if self.gs.end_reason not in ('timeout','preparation_timeout'):
                 self.blood_loss[pid] += max(0, self.last_hp[pid]-hp)
             self.last_hp[pid] = hp
         self.gs.blood_loss = self.blood_loss.copy()
         self.gs.enabled_cards = self.enabled_cards
         self.gs.clock_config = self.timer.copy()
         self.gs.clock_remaining = self.remaining.copy()
-        self.gs.clock_active = self.gs.turn if self.timer['enabled'] and self.gs.phase == 'ACTION' else 0
+        active=self.timer['enabled'] and self.gs.phase=='ACTION'
+        self.gs.clock_active = self.gs.turn if active and not self.preparation_pending[self.gs.turn] else 0
+        self.gs.preparation_active=self.gs.turn if active and self.preparation_pending[self.gs.turn] else 0
+        self.gs.preparation_remaining=self.preparation_remaining.copy()
         self.gs.action_log = list(self.log)
         self.gs.match_id = self.match_id
 
@@ -107,9 +118,22 @@ class Match:
             self.publish()
             return
         if gs.phase == 'ACTION' and self.timer['enabled']:
-            self.remaining[gs.turn] = max(0, self.remaining[gs.turn]-elapsed)
+            if self.preparation_pending[gs.turn]:
+                left=self.preparation_remaining[gs.turn]
+                if left is not None:
+                    self.preparation_remaining[gs.turn]=max(0,left-elapsed)
+                    if self.preparation_remaining[gs.turn]<=0:
+                        pid=gs.turn
+                        self.record('preparation_timeout',pid)
+                        setattr(gs,f'p{pid}_fingers',0)
+                        gs.phase='GAMEOVER';gs.round_winner=3-pid;gs.round_damage=0;gs.end_reason='preparation_timeout'
+                        self.record('gameover',winner=3-pid,reason=gs.end_reason)
+                self.publish()
+                return
+            if self.remaining[gs.turn] is not None:
+                self.remaining[gs.turn] = max(0, self.remaining[gs.turn]-elapsed)
             for _ in range(2):
-                if gs.phase != 'ACTION' or self.remaining[gs.turn] > 0:
+                if gs.phase != 'ACTION' or self.preparation_pending[gs.turn] or self.remaining[gs.turn] is None or self.remaining[gs.turn] > 0:
                     break
                 pid = gs.turn
                 self.record('timeout', pid)
@@ -126,13 +150,14 @@ class Match:
 
     def handoff(self, pid, automatic=False):
         if self.timer['enabled']:
-            if self.timer['mode'] == 'fischer' and not automatic:
+            if self.timer['mode'] == 'fischer' and not automatic and self.remaining[pid] is not None:
                 self.remaining[pid] += self.timer['increment_seconds']
             elif self.timer['mode'] == 'turn':
-                self.remaining[3-pid] = float(self.timer['turn_seconds'])
+                self.remaining[3-pid] = self.timer['turn_seconds']
         self.gs.turn = 3-pid
 
     def stay(self, pid, automatic=False):
+        if not automatic:self.preparation_pending[pid]=False
         setattr(self.gs, f'p{pid}_stop', True)
         self.record('stay', pid, automatic=automatic)
         self.handoff(pid, automatic)
@@ -222,6 +247,7 @@ class Match:
                 return False
             before_count = len(getattr(gs, f'p{pid}_hand'))
             gs.draw_card(pid)
+            self.preparation_pending[pid]=False
             hand = getattr(gs, f'p{pid}_hand')
             drawn = hand[before_count:] if before_count >= 1 else []
             setattr(gs, f'p{pid}_stop', False)
@@ -232,6 +258,7 @@ class Match:
             self.stay(pid)
         elif cmd == 'DISCARD':
             gs.discard_trump(pid, index)
+            self.preparation_pending[pid]=False
             setattr(gs, f'p{pid}_stop', False)
             self.record('discard', pid)  # A discarded trump is private.
         elif cmd == 'TRUMP':
@@ -242,6 +269,7 @@ class Match:
                 if card[1] not in ('SHIELD_ATTACK', 'SHIELD_ATTACK_PLUS', 'OBLIVION') and not (card[1] == 'TARGET' and any(t['type'] == 'TARGET' for t in own)):
                     return False
             old_round = gs.round_id
+            self.preparation_pending[pid]=False
             before = [list(gs.p1_hand[1:]), list(gs.p2_hand[1:])]
             target_before = gs.target_score
             locked = any(t['owner'] == opponent and t['type'] in ('GAMBLE','SILENCE') for t in gs.active_trumps)

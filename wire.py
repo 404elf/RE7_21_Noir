@@ -5,11 +5,12 @@ import socket
 import struct
 
 MAGIC=b'R21J'
-VERSION=2
+VERSION=3
 MAX_FRAME=262144
 FIELDS=set('deck p1_hand p2_hand p1_trumps p2_trumps active_trumps max_hp_limit p1_fingers p2_fingers target_score round_starter turn phase round_id round_winner round_damage result_timer p1_stop p2_stop p1_req_rematch p2_req_rematch last_action_time is_escape_end INSTANT_TYPES last_result end_reason draw_offer blood_loss enabled_cards clock_config clock_remaining clock_active action_log match_id network_paused'.split())
 REQUIRED=set('deck p1_hand p2_hand p1_trumps p2_trumps active_trumps max_hp_limit p1_fingers p2_fingers target_score round_starter turn phase round_id round_winner round_damage result_timer p1_stop p2_stop p1_req_rematch p2_req_rematch last_action_time is_escape_end INSTANT_TYPES'.split())
 FIELDS.add('opening_cards')
+FIELDS.update(('preparation_remaining','preparation_active'))
 
 def bounded(value, depth=0, budget=None):
     if budget is None: budget=[20000]
@@ -49,9 +50,9 @@ def state_from(data):
         for card in data[key]:
             if not isinstance(card,list) or len(card)!=3 or not all(isinstance(s,str) for s in card[:2]) or type(card[2]) is not int: raise ValueError('trump')
         data[key]=[tuple(card) for card in data[key]]
-    for key in ('last_action_time','blood_loss','clock_remaining'):
+    for key in ('last_action_time','blood_loss','clock_remaining','preparation_remaining'):
         if key in data:
-            if not isinstance(data[key],dict) or set(data[key])!={'1','2'} or any(type(v) not in (int,float) for v in data[key].values()): raise ValueError('player_map')
+            if not isinstance(data[key],dict) or set(data[key])!={'1','2'} or any(type(v) not in (int,float) and not (v is None and key in ('clock_remaining','preparation_remaining')) for v in data[key].values()): raise ValueError('player_map')
             data[key]={int(k):v for k,v in data[key].items()}
     for key in ('max_hp_limit','target_score','p1_fingers','p2_fingers','round_starter','round_id','round_winner','round_damage'):
         if type(data[key]) is not int or not -10000<=data[key]<=1000000: raise ValueError('state_number')
@@ -73,7 +74,7 @@ def state_from(data):
         from match import timer_config
         if not isinstance(data['clock_config'],dict): raise ValueError('clock_config')
         data['clock_config']=timer_config(data['clock_config'])
-    for key in ('clock_active','draw_offer'):
+    for key in ('clock_active','draw_offer','preparation_active'):
         if key in data and (type(data[key]) is not int or data[key] not in (0,1,2)): raise ValueError('player_index')
     result=data.get('last_result')
     if result is not None:

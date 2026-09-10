@@ -1,3 +1,4 @@
+from app_paths import config_path as player_config, presets_path, data_path, sounds_path
 """Manual GitHub release updates, verified and installed side by side."""
 import hashlib
 import json
@@ -110,7 +111,7 @@ def preserve(source, target, backup):
 def install(root, release, fetch=request):
     version(release['tag'])
     root = Path(root)
-    stage = root/'updates'/(release['tag']+'-'+uuid.uuid4().hex[:8])
+    stage = data_path(root,'updates')/(release['tag']+'-'+uuid.uuid4().hex[:8])
     stage.mkdir(parents=True, exist_ok=False)
     archive = stage/'release.zip'
     size = 0
@@ -127,26 +128,26 @@ def install(root, release, fetch=request):
         raise ValueError('checksum_failed')
     unpack(archive, stage)
     package = stage/'RE7_21_Noir'
-    metadata = read_json(package/'version.json')
+    metadata = read_json(player_config(package,'version.json'))
     if metadata.get('product') != 'RE7_21_Noir' or version(metadata.get('version')) != version(release['tag']):
         raise ValueError('wrong_product')
     exe = package/'RE7_21_Noir.exe'
     if not exe.is_file():
         raise ValueError('missing_executable')
     for name in ('config.json', 'audio.json', 'timer.json', 'updates.json','network.json','room-server.json'):
-        preserve(root/name, package/name, package/'package-defaults'/name)
-    sound_root = root/'sounds'
+        preserve(player_config(root,name), player_config(package,name), data_path(package,'package-defaults')/name)
+    sound_root = sounds_path(root)
     if sound_root.is_dir():
         for source in sound_root.rglob('*'):
             if source.is_file() and not source.is_symlink() and source.resolve().is_relative_to(sound_root.resolve()):
-                relative = source.relative_to(root)
-                preserve(source, package/relative, package/'package-defaults'/relative)
-    preset_root=root/'presets'
+                relative = source.relative_to(sound_root)
+                preserve(source, sounds_path(package)/relative, data_path(package,'package-defaults')/'sounds'/relative)
+    preset_root=presets_path(root)
     if preset_root.is_dir():
         for source in preset_root.glob('*.json'):
             if source.is_file() and not source.is_symlink() and source.resolve().is_relative_to(preset_root.resolve()):
-                relative=source.relative_to(root)
-                preserve(source,package/relative,package/'package-defaults'/relative)
+                relative=source.relative_to(preset_root)
+                preserve(source,presets_path(package)/relative,data_path(package,'package-defaults')/'presets'/relative)
     return exe
 
 
@@ -160,9 +161,9 @@ class Updater:
         self.status = 'idle'
         self.error = ''
         try:
-            self.current = read_json(self.root/'version.json')['version']
+            self.current = read_json(player_config(self.root,'version.json'))['version']
         except (OSError, ValueError, KeyError):
-            self.current = '1.4.5'
+            self.current = '1.5.0'
 
     def start(self, download=False):
         if self.busy:
@@ -176,7 +177,7 @@ class Updater:
                         raise ValueError('no_release')
                     self.events.put(('installed', install(self.root, self.release)))
                 else:
-                    result = release_info(read_json(self.root/'updates.json'), self.current)
+                    result = release_info(read_json(player_config(self.root,'updates.json')), self.current)
                     self.events.put(('available' if result else 'current', result))
             except Exception as exc:
                 self.events.put(('error', str(exc)))

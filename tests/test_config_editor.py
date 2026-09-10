@@ -53,7 +53,7 @@ class EditorTests(unittest.TestCase):
             editor.action(('cfg','tab','timer'))
             editor.action(('cfg','field',0))
             editor.action(('cfg','field',1))
-            editor.action(('cfg','field',6));editor.buffer='0'
+            editor.action(('cfg','field',next(i for i,r in enumerate(editor.rows()) if r[0]=='settlement_seconds')));editor.buffer='0'
             editor.save()
             saved=json.loads((Path(root)/'timer.json').read_text(encoding='utf-8'))
             self.assertTrue(saved['enabled'])

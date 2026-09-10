@@ -1,4 +1,4 @@
-param([string]$OutputRoot = 'dist/v1.4.5')
+param([string]$OutputRoot = 'dist/v1.5.0')
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $packageRoot = Join-Path $OutputRoot 'RE7_21_Noir'
@@ -9,24 +9,21 @@ $buildWork = Join-Path 'build' ([DateTime]::Now.ToString('yyyyMMddHHmmssfff'))
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
 & .venv/Scripts/python.exe -m PyInstaller --windowed --onedir --distpath $OutputRoot --workpath $buildWork --specpath $buildWork --name RE7_21_Noir (Join-Path $PSScriptRoot 'main.py')
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
-$destination = Join-Path $packageRoot 'config.json'
-if (Test-Path -LiteralPath $destination) {
-    $backup = "$destination.$([DateTime]::Now.ToString('yyyyMMddHHmmssfff')).bak"
-    Copy-Item -LiteralPath $destination -Destination $backup
-    if ((Get-FileHash -LiteralPath $destination).Hash -ne (Get-FileHash -LiteralPath $backup).Hash) { throw 'Backup verification failed' }
+# The player root contains only folders, the executable and a short guide.
+foreach ($folder in @('custom/game','custom/timer','custom/audio','custom/network','custom/presets','docs','userdata')) {
+    New-Item -ItemType Directory -Path (Join-Path $packageRoot $folder) | Out-Null
 }
-Copy-Item -LiteralPath config.json -Destination $destination
-Copy-Item -LiteralPath README.md -Destination (Join-Path $packageRoot 'README.md')
-Copy-Item -LiteralPath audio.json -Destination (Join-Path $packageRoot 'audio.json')
-Copy-Item -LiteralPath sounds -Destination (Join-Path $packageRoot 'sounds') -Recurse
-Copy-Item -LiteralPath presets -Destination (Join-Path $packageRoot 'presets') -Recurse
-foreach ($name in @('timer.json', 'updates.json', 'version.json')) {
-    Copy-Item -LiteralPath $name -Destination (Join-Path $packageRoot $name)
+$files = @{
+    'config.json'='custom/game/config.json'; 'timer.json'='custom/timer/timer.json';
+    'audio.json'='custom/audio/audio.json'; 'network.json'='custom/network/network.json';
+    'updates.json'='custom/network/updates.json'; 'room-server.json'='custom/network/room-server.json';
+    'version.json'='_internal/version.json'; 'docs/开始游戏.txt'='开始游戏.txt';
+    'docs/AI-CONFIG-GUIDE.md'='docs/AI-CONFIG-GUIDE.md'; 'NETWORKING.md'='docs/NETWORKING.md'
 }
-foreach ($name in @('network.json','room-server.json','start-room-server.cmd','NETWORKING.md','SECURITY.md')) {
-    Copy-Item -LiteralPath $name -Destination (Join-Path $packageRoot $name)
+foreach ($source in $files.Keys) {
+    Copy-Item -LiteralPath $source -Destination (Join-Path $packageRoot $files[$source])
 }
-New-Item -ItemType Directory -Path (Join-Path $packageRoot 'docs') | Out-Null
-foreach ($name in @('AI-v1.4.1.md','ai-v141-calibrated-benchmark.jsonl','AI-v1.4.2.md','AI-v1.4.3.md','AI-v1.4.4.md','AI-v1.4.5.md','ai-v142-release-benchmark.jsonl','ai-v144-weight-trial.jsonl','ai-v144-final-benchmark.json','ai-wait-lead-trial.jsonl','ai-wait-lead-holdout.jsonl')) {
-    Copy-Item -LiteralPath (Join-Path 'docs' $name) -Destination (Join-Path $packageRoot "docs/$name")
-}
+Copy-Item -LiteralPath sounds -Destination (Join-Path $packageRoot 'custom/audio/sounds') -Recurse
+Get-ChildItem -LiteralPath presets -Filter '*.json' | Copy-Item -Destination (Join-Path $packageRoot 'custom/presets')
+$serverScript = @('@echo off', 'cd /d "%~dp0..\.."', '"RE7_21_Noir.exe" --room-server "custom\network\room-server.json"', 'pause')
+$serverScript | Set-Content -LiteralPath (Join-Path $packageRoot 'custom/network/start-room-server.cmd') -Encoding ascii

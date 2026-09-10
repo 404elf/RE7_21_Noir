@@ -1,3 +1,4 @@
+from app_paths import config_path as player_config, presets_path, data_path, sounds_path
 """Local, optional sound feedback. No changes to the game protocol or rules."""
 import json
 import math
@@ -38,7 +39,7 @@ class SoundManager:
         self.issues = []
         config = {}
         try:
-            with (self.root/'audio.json').open(encoding='utf-8-sig') as stream:
+            with (player_config(self.root,'audio.json')).open(encoding='utf-8-sig') as stream:
                 config = json.load(stream)
             if not isinstance(config, dict):
                 raise ValueError('audio.json must be an object')
@@ -74,7 +75,7 @@ class SoundManager:
             if not isinstance(path, str) or not path.strip():
                 continue
             try:
-                effect = pygame.mixer.Sound(str(self.root/path))
+                effect = pygame.mixer.Sound(str(player_config(self.root,'audio.json').parent/path))
                 effect.set_volume(self.master*self.levels[category]*volume(entry.get('volume'), 1.))
                 self.sounds[event] = effect
             except (pygame.error, OSError, ValueError) as exc:
@@ -147,7 +148,7 @@ class SoundTracker:
         previous, self.previous = self.previous, snapshot
         if previous == snapshot:
             return []
-        damaged = bool(previous and previous['match'] == snapshot['match'] and getattr(state, 'end_reason', '') != 'timeout' and any(now < old for now, old in zip(snapshot['health'], previous['health'])))
+        damaged = bool(previous and previous['match'] == snapshot['match'] and getattr(state, 'end_reason', '') not in ('timeout','preparation_timeout') and any(now < old for now, old in zip(snapshot['health'], previous['health'])))
         if snapshot['phase'] == 'GAMEOVER':
             self.pending = None
             if previous and previous['phase'] == 'GAMEOVER':

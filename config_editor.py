@@ -1,3 +1,4 @@
+from app_paths import config_path as player_config, presets_path, data_path, sounds_path
 """In-game configuration editor with validated values and verified atomic backups."""
 import copy
 import json
@@ -10,7 +11,7 @@ import uuid
 import pygame as pg
 from cards import CARDS, info, english_name
 from presentation_rules import DEFAULT_WEIGHTS, NUMBER_NAMES
-from match import DEFAULT_TIMER
+from match import DEFAULT_TIMER, UNLIMITED_TIMER_FIELDS
 
 # key, Chinese, English, minimum, maximum, increment, integer
 GAME = [
@@ -31,7 +32,8 @@ TIMER = [
  ('turn_seconds','每次行动秒数','Seconds per turn',1,3600,5,False),
  ('round_seconds','每人每局秒数','Seconds per player / round',1,86400,10,False),
  ('initial_minutes','整场初始分钟','Match minutes',1,1440,1,False),
- ('increment_seconds','交接行动增加秒数','Increment seconds',0,300,1,False),
+ ('increment_seconds','抽牌 / 停牌增加秒数','Increment seconds',0,300,1,False),
+ ('preparation_seconds','每局首次行动准备秒数','Opening preparation seconds',1,3600,5,False),
  ('settlement_seconds','亮牌等待秒数（0 为跳过）','Reveal wait (0 skips)',0,60,.5,False),
 ]
 AUDIO = [('enabled','启用音效','Enable sound','bool')]+[(k,zh,en,0,1,.05,False) for k,zh,en in [
@@ -46,7 +48,7 @@ class ConfigEditor:
         defaults = {'config.json': game_defaults, 'timer.json': DEFAULT_TIMER,
                     'audio.json': dict(enabled=True, master_volume=.65,ui_volume=.45,game_volume=.75,result_volume=.8)}
         for file, fallback in defaults.items():
-            path = self.root/file
+            path = player_config(self.root,file)
             raw = path.read_bytes() if path.exists() else None
             data = json.loads(raw.decode('utf-8-sig')) if raw is not None else copy.deepcopy(fallback)
             if not isinstance(data, dict):
@@ -64,8 +66,10 @@ class ConfigEditor:
         self.weight_rows.sort(key=lambda row: weights.get(row[0],DEFAULT_WEIGHTS.get(row[0],0)) <= 0)
         self.tab, self.page, self.editing = 'game', 0, None
         self.buffer, self.message, self.replace = '', '', True
-        self.presets = sorted((self.root/'presets').glob('*.json'))
+        self.presets = sorted((presets_path(self.root)).glob('*.json'))
         self.preset_name = '自定义 / Custom'
+        self.locks = set()
+        self.timer_only = False
 
     def apply_preset(self, index):
         """Stage a preset; saving retains the usual validation and verified backup."""
@@ -94,14 +98,16 @@ class ConfigEditor:
         rng = random.Random()
         rules = self.docs['config.json']['game_settings']
         # Keep unique 1–11 cards and viable targets; randomise playable settings.
-        rules.update(max_hp=rng.choice((5,10,15,20)), target_score=rng.choice((17,21,24,27)),
-                     deck_range_start=1, deck_range_end=11, initial_trumps_count=rng.randint(2,5),
+        changes = dict(max_hp=rng.choice((5,10,15,20)),
+                     initial_trumps_count=rng.randint(2,5),
                      round_reward_trumps_count=rng.randint(1,3), max_trumps_hand_size=rng.choice((10,15,20)),
                      max_active_trumps_on_table=10, hit_draw_trump_probability=round(rng.uniform(.15,.55),2),
                      number_card_draw_probability=round(rng.uniform(.1,.35),2))
+        for key, value in changes.items():
+            if ('game', key) not in self.locks: rules[key] = value
         weights=self.docs['config.json']['trump_weights']
-        for row in self.weight_rows: weights[row[0]]=rng.choice((0,2,4,6,8,10))
-        weights['Perfect']=8
+        for row in self.weight_rows:
+            if ('weights', row[0]) not in self.locks: weights[row[0]]=rng.choice((0,2,4,6,8,10))
         self.preset_name='随机 / Random'
         self.message='已生成随机草稿，可继续修改 / Random draft ready to edit'
 
@@ -145,6 +151,7 @@ class ConfigEditor:
                 raise ValueError('牌堆范围至少需要 4 个不同点数 / At least 4 number cards required')
 
     def validate_value(self,row,v):
+        if row[0] in UNLIMITED_TIMER_FIELDS and v is None: return
         if row[3] == 'bool':
             if not isinstance(v,bool): raise ValueError(row[1]+'需要开关值')
         elif isinstance(row[3],tuple):
@@ -155,17 +162,18 @@ class ConfigEditor:
     def save(self):
         self.commit_field()
         self.validate()
-        file=self.file(); path=self.root/file
+        file=self.file(); path=player_config(self.root,file)
         current=path.read_bytes() if path.exists() else None
         if current != self.original[file]:
             raise ValueError('文件已被外部修改，请重开游戏后读取，避免覆盖 / File changed externally')
         data=(json.dumps(self.docs[file],ensure_ascii=False,indent=2)+'\n').encode('utf-8')
         if current is not None:
-            backups=self.root/'config-backups'; backups.mkdir(exist_ok=True)
+            backups=data_path(self.root,'config-backups'); backups.mkdir(parents=True,exist_ok=True)
             backup=backups/(file+'.'+uuid.uuid4().hex+'.bak')
             backup.write_bytes(current)
             if backup.read_bytes()!=current: raise OSError('Backup verification failed')
-        fd,tmp=tempfile.mkstemp(prefix=file+'.',suffix='.tmp',dir=self.root)
+        path.parent.mkdir(parents=True,exist_ok=True)
+        fd,tmp=tempfile.mkstemp(prefix=file+'.',suffix='.tmp',dir=path.parent)
         try:
             with os.fdopen(fd,'wb') as stream:
                 stream.write(data); stream.flush(); os.fsync(stream.fileno())
@@ -181,10 +189,15 @@ class ConfigEditor:
         if kind=='save': return self.save()
         self.commit_field()
         self.message=''
-        if kind=='preset': self.apply_preset(value)
+        if kind=='lock':
+            key=(self.tab,self.rows()[value][0])
+            self.locks.symmetric_difference_update({key})
+        elif kind=='unlock_all': self.locks.clear()
+        elif kind=='unlimited': self.values()[self.rows()[value][0]]=None
+        elif kind=='preset': self.apply_preset(value)
         elif kind=='save_preset':
             self.validate()
-            folder=self.root/'presets';folder.mkdir(exist_ok=True)
+            folder=presets_path(self.root);folder.mkdir(exist_ok=True)
             path=folder/('自定义-'+uuid.uuid4().hex[:8]+'.json')
             with path.open('x',encoding='utf-8') as stream:
                 json.dump(self.docs['config.json'],stream,ensure_ascii=False,indent=2)
@@ -197,6 +210,9 @@ class ConfigEditor:
             self.docs['audio.json'].update(master_volume=.55,result_volume=.55)
             self.message='新版轻音效已载入草稿，保存后生效 / New sounds staged; save to apply'
         elif kind=='random': self.randomize()
+        elif kind=='reload_presets':
+            self.presets=sorted(presets_path(self.root).glob('*.json'))
+            self.message='已刷新预设文件夹 / Presets refreshed'
         elif kind=='preset_page': self.preset_page=max(0,getattr(self,'preset_page',0)+value)
         elif kind=='custom': self.preset_name='自定义 / Custom'
         elif kind=='tab': self.tab,self.page=value,0
@@ -207,10 +223,10 @@ class ConfigEditor:
             elif isinstance(row[3],tuple):
                 choices=row[3]; self.values()[row[0]]=choices[(choices.index(self.get(row))+1)%len(choices)]
             else:
-                self.editing=value; self.buffer=str(self.get(row)); self.replace=True
+                self.editing=value; self.buffer=str(self.get(row) if self.get(row) is not None else DEFAULT_TIMER[row[0]]); self.replace=True
         elif kind in ('plus','minus','zero'):
             row=self.rows()[value]
-            new=0 if kind=='zero' else min(row[4],max(row[3],self.get(row)+row[5]*(1 if kind=='plus' else -1)))
+            new=0 if kind=='zero' else min(row[4],max(row[3],(self.get(row) if self.get(row) is not None else DEFAULT_TIMER[row[0]])+row[5]*(1 if kind=='plus' else -1)))
             self.values()[row[0]]=int(new) if row[6] else round(new,6)
 
     def key(self,event):
@@ -227,26 +243,37 @@ class ConfigEditor:
         app.buttons=[]
         shade=pg.Surface((1440,900),pg.SRCALPHA);shade.fill((5,5,5,220));app.canvas.blit(shade,(0,0))
         app.panel((100,55,1240,790))
-        app.text(app.t('游戏配置','GAME SETTINGS'),136,84,32,(229,220,201),True)
+        app.text(app.t('自定义计时','CUSTOM TIME CONTROL') if self.timer_only else app.t('游戏配置','GAME SETTINGS'),136,84,32,(229,220,201),True)
         app.button((1110,80,190,45),app.t('返回（暂不保存）','Close without saving'),'close_overlay')
-        for i,(key,zh,en) in enumerate([('game','对局规则','Rules'),('weights','王牌权重','Trump weights'),('timer','计时与亮牌','Timing'),('audio','音效音量','Audio')]):
-            app.button((136+i*289,147,273,48),app.t(zh,en),('cfg','tab',key),primary=self.tab==key)
+        for i,(key,zh,en) in enumerate([] if self.timer_only else [('game','对局规则','Rules'),('weights','王牌权重','Trump weights'),('audio','音效音量','Audio')]):
+            app.button((136+i*390,147,370,48),app.t(zh,en),('cfg','tab',key),primary=self.tab==key)
         hint=app.t('点击数字直接输入，也可用 ± 微调。保存后生效（规则和权重一并保存）。','Click a value to type, or use ±. Save the current category to apply.')
+        if self.timer_only: hint=app.t('只有所选计时方式的额度生效；保存后用于下一场。准备与亮牌等待在第 2 页。','Only the selected clock mode applies. Save for the next match. Preparation and reveal delay are on page 2.')
         if self.tab=='weights': hint=app.t('权重越大越常见；0 为禁用。普通数字牌概率在“对局规则”中设置。','Higher weight means more frequent; 0 disables. Number-card chance is in Rules.')
         app.text(hint,136,212,17,(165,152,133),width=1160)
+        if self.tab in ('game','weights'):
+            app.button((1125,203,152,40),app.t('一键解锁','Unlock all'),('cfg','unlock_all',None))
+        if self.timer_only:
+            app.text(app.t('不限时可逐项设置；关闭计时将同时关闭准备倒计时。','Unlimited is available per field; switching timing off also disables preparation.'),136,160,18,(165,152,133),width=1100)
         rows=self.rows(); pages=max(1,(len(rows)+5)//6);self.page=min(self.page,pages-1)
         for i,row in enumerate(rows[self.page*6:self.page*6+6]):
             idx=self.page*6+i;y=258+i*68
-            app.text(app.t(row[1],row[2]),146,y+12,20,(229,220,201),width=600)
+            app.text(app.t(row[1],row[2]),146,y+12,20,(229,220,201),width=505)
+            if self.tab in ('game','weights'):
+                locked=(self.tab,row[0]) in self.locks
+                app.button((670,y,75,44),app.t('已锁','Locked') if locked else app.t('锁定','Lock'),('cfg','lock',idx),primary=locked)
             value=self.get(row)
             if self.editing==idx: label=self.buffer+'|'
             elif row[3]=='bool': label=app.t('开','On') if value else app.t('关','Off')
             elif isinstance(row[3],tuple): label={'turn':app.t('每次行动','Per turn'),'round':app.t('每人每局','Per round'),'fischer':app.t('整场 + 加秒','Match + increment')}.get(value,str(value))
+            elif value is None: label=app.t('不限时','Unlimited')
             else: label=f'{value:g}'
             app.button((827,y,245,44),label,('cfg','field',idx),primary=self.editing==idx)
             if len(row)>4:
                 app.button((759,y,50,44),'−',('cfg','minus',idx))
                 app.button((1090,y,50,44),'+',('cfg','plus',idx))
+                if self.tab=='timer' and row[0] in UNLIMITED_TIMER_FIELDS:
+                    app.button((1158,y,119,44),app.t('不限时','Unlimited'),('cfg','unlimited',idx))
                 if self.tab=='weights': app.button((1158,y,119,44),app.t('禁用','Disable'),('cfg','zero',idx))
         app.text(self.message,136,677,16,(232,104,83),width=1160)
         app.text(app.t('规则与计时用于下一场；音量立即生效。未保存草稿关闭面板后仍保留。','Rules/timing apply next match; audio applies now. Unsaved drafts remain while this app is open.'),136,708,15,(165,152,133),width=1160)
@@ -255,7 +282,7 @@ class ConfigEditor:
         app.button((354,756,100,48),'›',('cfg','page',1),enabled=self.page+1<pages)
         app.button((892,750,386,58),app.t('保存设置','Save settings'),('cfg','save',None),True)
         # Presets use their own page so controls never compete with numeric fields.
-        app.button((510,756,350,48),app.t('预设 / 随机 · ','Presets / random · ')+self.preset_name,('cfg','tab','presets'))
+        if not self.timer_only: app.button((510,756,350,48),app.t('预设 / 随机 · ','Presets / random · ')+self.preset_name,('cfg','tab','presets'))
         if self.tab=='audio':
             app.button((146,608,580,44),app.t('采用新版轻音效（保存后生效）','Use new quiet sounds (save to apply)'),('cfg','quiet_audio',None))
         if self.tab=='presets':
@@ -274,7 +301,9 @@ class ConfigEditor:
             app.button((146,495,160,44),'‹',('cfg','preset_page',-1),enabled=self.preset_page>0)
             app.text(f'{self.preset_page+1} / {preset_pages}',335,505,18,(229,220,201))
             app.button((425,495,160,44),'›',('cfg','preset_page',1),enabled=self.preset_page+1<preset_pages)
-            app.text(self.message,146,625,18,(232,104,83),width=1120)
+            app.button((912,495,365,44),app.t('刷新预设文件夹','Refresh preset folder'),('cfg','reload_presets',None))
+            app.text(app.t(f'随机保留目标点数；已锁定 {len(self.locks)} 项。AI 配置说明见说明文件夹。',f'Random preserves your target; {len(self.locks)} fields locked. AI config guide is in docs.'),146,602,16,(165,152,133),width=1110)
+            app.text(self.message,146,635,18,(232,104,83),width=1120)
             app.text(app.t('当前草稿：','Current draft: ')+self.preset_name,146,565,20,(229,220,201))
             app.button((146,680,365,48),app.t('继续编辑对局规则','Edit rules'),('cfg','tab','game'))
             app.button((529,680,365,48),app.t('继续编辑王牌权重','Edit weights'),('cfg','tab','weights'))

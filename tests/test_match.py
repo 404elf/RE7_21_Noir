@@ -37,6 +37,7 @@ class MatchTests(unittest.TestCase):
         match.tick()
         self.assertEqual(match.gs.turn, 1)
         match, clock = self.make(enabled=True, mode='turn', turn_seconds=5)
+        match.preparation_pending={1:False,2:False}  # Test the running turn clock, after preparation.
         clock.advance(5.1)
         self.assertFalse(match.command(1, f'HIT:{match.gs.round_id}'))
         self.assertTrue(match.gs.p1_stop)
@@ -49,11 +50,12 @@ class MatchTests(unittest.TestCase):
         match.gs.p1_trumps = [('Shield', 'SHIELD', 1)]
         clock.advance(2)
         self.assertTrue(match.command(1, f'DISCARD:0:{match.gs.round_id}'))
-        self.assertEqual(match.remaining[1], 178)
+        self.assertEqual(match.remaining[1], 180)  # First discard uses preparation, no increment.
         clock.advance(1)
         self.assertTrue(match.command(1, f'STAY:{match.gs.round_id}'))
-        self.assertEqual(match.remaining[1], 180)
-        clock.advance(181)
+        self.assertEqual(match.remaining[1], 182)
+        match.preparation_pending[2]=False
+        clock.advance(183)
         match.tick()
         self.assertEqual(match.gs.phase, 'GAMEOVER')
         self.assertEqual(match.gs.round_winner, 1)
@@ -61,6 +63,7 @@ class MatchTests(unittest.TestCase):
 
     def test_round_budget_not_reset_on_turn_and_settlement_pauses(self):
         match, clock = self.make(enabled=True, mode='round', round_seconds=10, settlement_seconds=10)
+        match.preparation_pending={1:False,2:False}  # Budget behavior after both first moves.
         match.gs.p1_hand = [1, 2]
         clock.advance(4)
         match.command(1, f'HIT:{match.gs.round_id}')
@@ -85,7 +88,7 @@ class MatchTests(unittest.TestCase):
         rid = match.gs.round_id
         match.command(1, f'TRUMP:0:{rid}')
         self.assertGreater(match.gs.round_id, rid)
-        self.assertEqual(match.remaining[1], 172)
+        self.assertEqual(match.remaining[1], 180)  # First trump consumes preparation only.
         self.assertEqual(match.remaining[2], 180)
 
     def test_rematch_resets_clocks_identity_and_history(self):
@@ -157,14 +160,14 @@ class MatchTests(unittest.TestCase):
                     return value
             self.fail('Network event timeout')
         try:
-            host.open('127.0.0.1', True, timer=dict(enabled=True, mode='turn', turn_seconds=1))
+            host.open('127.0.0.1', True, timer=dict(enabled=True, mode='turn', turn_seconds=1,preparation_seconds=1))
             wait(host, lambda event, value: event == 'id')
             guest.open('127.0.0.1')
             wait(guest, lambda event, value: event == 'id')
             wait(host, lambda event, value: event == 'state')
             host.sock.sendall(b'\x00\x00')
-            state = wait(host, lambda event, value: event == 'state' and value.phase == 'RESULT')
-            self.assertEqual(sum(entry['event'] == 'timeout' for entry in state.action_log), 2)
+            state = wait(host, lambda event, value: event == 'state' and value.phase == 'GAMEOVER')
+            self.assertEqual(sum(entry['event'] == 'preparation_timeout' for entry in state.action_log), 1)
             self.assertTrue(state.clock_config['enabled'])
             guest.close()
             wait(host, lambda event, value: event == 'error')
