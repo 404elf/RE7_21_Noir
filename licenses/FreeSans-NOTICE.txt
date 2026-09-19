@@ -1,0 +1,6 @@
+Bundled pygame fallback font: freesansbold.ttf
+Embedded copyright: Copyright 2002 Free Software Foundation.
+Embedded license: The use of this font is granted subject to GNU General Public License.
+Embedded license URL: http://www.gnu.org/copyleft/gpl.html
+Upstream font project: https://www.gnu.org/software/freefont/
+The font is a third-party dependency, not licensed under this project's MIT License. System fonts selected by the application are not copied into the package.

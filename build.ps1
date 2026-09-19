@@ -1,4 +1,4 @@
-param([string]$OutputRoot = 'dist/v1.5.2')
+param([string]$OutputRoot = 'dist/v1.5.3')
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $packageRoot = Join-Path $OutputRoot 'RE7_21_Noir'
@@ -18,11 +18,14 @@ $files = @{
     'audio.json'='custom/audio/audio.json'; 'network.json'='custom/network/network.json';
     'updates.json'='custom/network/updates.json'; 'room-server.json'='custom/network/room-server.json';
     'version.json'='_internal/version.json'; 'docs/开始游戏.txt'='开始游戏.txt';
-    'docs/AI-CONFIG-GUIDE.md'='docs/AI-CONFIG-GUIDE.md'; 'NETWORKING.md'='docs/NETWORKING.md'
+    'docs/AI-CONFIG-GUIDE.md'='docs/AI-CONFIG-GUIDE.md'; 'NETWORKING.md'='docs/NETWORKING.md';
+    'LICENSE'='docs/LICENSE'; 'NOTICE.md'='docs/NOTICE.md';
+    'THIRD_PARTY_NOTICES.md'='docs/THIRD_PARTY_NOTICES.md'
 }
 foreach ($source in $files.Keys) {
     Copy-Item -LiteralPath $source -Destination (Join-Path $packageRoot $files[$source])
 }
+Copy-Item -LiteralPath licenses -Destination (Join-Path $packageRoot 'docs/licenses') -Recurse
 Copy-Item -LiteralPath sounds -Destination (Join-Path $packageRoot 'custom/audio/sounds') -Recurse
 Get-ChildItem -LiteralPath presets -Filter '*.json' | Copy-Item -Destination (Join-Path $packageRoot 'custom/presets')
 $serverScript = @('@echo off', 'cd /d "%~dp0..\.."', '"RE7_21_Noir.exe" --room-server "custom\network\room-server.json"', 'pause')

@@ -8,6 +8,9 @@ parser.add_argument('directory',type=Path)
 args=parser.parse_args();root=args.directory.resolve()
 if root.name!='RE7_21_Noir' or not (root/'RE7_21_Noir.exe').is_file():raise SystemExit('Pass the built player directory')
 metadata=(root/'_internal/version.json').read_bytes()
+for notice in ('LICENSE','NOTICE.md','THIRD_PARTY_NOTICES.md'):
+    assert (root/'docs'/notice).is_file(), 'Missing license notice: '+notice
+assert (root/'docs/licenses/pygame-ce-LGPL-2.1.txt').is_file(), 'Missing LGPL text'
 allowed={'RE7_21_Noir.exe','开始游戏.txt'}
 assert all(p.is_dir() or p.name in allowed for p in root.iterdir()),'Unexpected player root file'
 assert not any(p.name.startswith(('test_','ai-','AI-v')) for p in root.rglob('*')),'Test artifact in player package'

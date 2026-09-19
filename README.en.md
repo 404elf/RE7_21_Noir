@@ -36,7 +36,7 @@ Paste the [AI configuration guide](docs/AI-CONFIG-GUIDE.md) into a chat AI with 
 
 Use **Manual update** in the lobby. Downloads are verified and installed separately, retaining the previous installation and custom files. Legacy files are backed up before migration. `RE7_21_Noir-Windows.zip` is the compatibility asset for old updaters; new players should choose **RE7-21-Windows.zip**.
 
-Both clients and room servers must update to v1.5.0 because the timing protocol changed.
+Use the same version for both clients and the room server.
 
 Feedback: **1543738958@qq.com**. Include the version, reproduction steps and, if available, the relevant `userdata/logs/` file.
 
@@ -44,7 +44,13 @@ This is a fan project, unaffiliated with CAPCOM. Resident Evil names belong to t
 
 Source setup: Python 3.12, install `requirements.txt`, then run `python main.py`. Source files retain their development layout. Test reports remain in the repository, not the player download.
 
+## License and credits
+
+The project's own code, interface and synthesized audio are under the **[MIT License](LICENSE)**. Keep the copyright and license notice when redistributing. See [credits and exclusions](NOTICE.md) and [third-party notices](THIRD_PARTY_NOTICES.md). Original game names and third-party assets are not relicensed under MIT.
+
 ## Updates
+
+**v1.5.3**: MIT license, authorship and AI-assistance credits, third-party notices included in player packages. Gameplay is unchanged from v1.5.2.
 
 **v1.5.2**: security review fixes (a hostile host can no longer crash the client or exhaust log storage); opening preparation now belongs to the first round only, rematches inherit the preset trump count, the card is named Add 2+, and the Nightmare AI handles crowded tables better. See [v1.5.2 release notes](docs/RELEASE-v1.5.2.md).
 
