@@ -11,7 +11,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = 'RE7_21_Noir-source'
-EXCLUDED_DIRS = {'.git', '.venv', '__pycache__', 'build', 'dist', 'logs', 'userdata', 'config-backups', 'certs', 'updates'}
+EXCLUDED_DIRS = {'.git', '.venv', '.venv-web', '.pytest_cache', '.artifacts', 'test-results', '__pycache__', 'build', 'dist', 'logs', 'userdata', 'config-backups', 'certs', 'updates'}
 EXCLUDED_SUFFIXES = {'.pyc', '.spec', '.log', '.zip', '.exe', '.pem', '.key', '.pfx', '.p12'}
 
 parser = argparse.ArgumentParser()

@@ -1,5 +1,8 @@
 from app_paths import config_path as player_config, presets_path, data_path, sounds_path
-import pygame
+try:
+    import pygame
+except ModuleNotFoundError:
+    pygame = None  # The shared game engine also runs in the headless Web service.
 import socket
 import threading
 import random

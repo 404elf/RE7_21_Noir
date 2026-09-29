@@ -12,20 +12,9 @@ import pygame as pg
 from cards import CARDS, info, english_name
 from presentation_rules import DEFAULT_WEIGHTS, NUMBER_NAMES
 from match import DEFAULT_TIMER, UNLIMITED_TIMER_FIELDS
+from rules import GAME
 
 # key, Chinese, English, minimum, maximum, increment, integer
-GAME = [
- ('max_hp','最大生命值','Maximum health',1,999,1,True),
- ('max_trumps_hand_size','手持王牌上限','Trump hand limit',1,100,1,True),
- ('max_active_trumps_on_table','场上王牌上限','Table trump limit',1,100,1,True),
- ('target_score','默认目标点数','Default target',1,999,1,True),
- ('initial_trumps_count','开局王牌数量（另加每局补充）','Starting trumps (+ round reward)',0,100,1,True),
- ('round_reward_trumps_count','每回合补充王牌','Round trump reward',0,100,1,True),
- ('hit_draw_trump_probability','抽牌时获得王牌概率（0–1）','Trump chance on hit (0–1)',0,1,.05,False),
- ('number_card_draw_probability','普通数字王牌概率（0–1）','Number trump chance (0–1)',0,1,.05,False),
- ('deck_range_start','牌堆最小点数','Lowest number card',1,100,1,True),
- ('deck_range_end','牌堆最大点数','Highest number card',1,100,1,True),
-]
 TIMER = [
  ('enabled','启用计时','Enable clock','bool'),
  ('mode','计时方式','Clock mode',('turn','round','fischer')),

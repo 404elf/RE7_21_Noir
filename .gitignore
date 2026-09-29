@@ -14,3 +14,7 @@ certs/
 *.key
 *.pfx
 *.p12
+.venv-web/
+.pytest_cache/
+.artifacts/
+test-results/

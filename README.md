@@ -1,5 +1,16 @@
 # RE7 / 21 — NOIR
 
+## 浏览器联机版
+
+新增浏览器双人牌桌：房间码 / 邀请链接、全部 Noir 王牌、原版计时、断线重连、求和 / 投降和再战。复用现有 Python 规则及 `config.json`，无需 Pygame 或组网软件。
+
+```sh
+python -m pip install -r requirements-web.txt
+python -m uvicorn web.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 2048
+```
+
+打开 <http://127.0.0.1:8000>；Docker 可用 `docker compose -p noir-web up --build -d`。详见 [Web 本地运行、架构、配置、测试与部署说明](docs/WEB.md)。房间存在内存中，请保持单 worker / 单副本；本次不包含生产部署。下方仍为原桌面版说明。
+
 **中文** | [English](README.en.md)
 
 基于《生化危机 7》「21」玩法的非官方独立桌面卡牌游戏。共用 1–11 数字牌堆，隐藏首牌，用王牌改变赌注与局势。保留原项目的卡牌规则，换上暗色牌桌、中文界面与更方便的玩法设置。
