@@ -84,6 +84,8 @@ docker compose -p noir-web down
 
 运行原桌面回归和 Web 测试合集时，另安装 `requirements.txt` 的 Pygame；无桌面环境请设 `SDL_VIDEODRIVER=dummy`、`SDL_AUDIODRIVER=dummy` 后执行 `python -m pytest tests -q`。CI 执行回归、双浏览器测试、Docker 构建和容器健康检查，不执行生产部署。
 
+测试夹具为原有三个 TCP 集成测试分配独立临时端口，避免 Linux 的 TIME_WAIT 造成跨测试端口冲突；断包、计时和端口被占用的原始断言保持不变。实际桌面默认端口未修改。
+
 ## 当前边界
 
 - 已覆盖双人完整对局及全部王牌。单机 AI/难度、桌面音效与动画、配置编辑器、桌面历史文件、自动更新器尚未迁移到浏览器。
