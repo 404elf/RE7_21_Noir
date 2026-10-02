@@ -117,7 +117,7 @@ h3 {
 .grain {
   position:absolute;
   inset:0;
-  background:url('/grain.svg');
+  background:url('./grain.svg');
   opacity:.055
 }
 #particles {

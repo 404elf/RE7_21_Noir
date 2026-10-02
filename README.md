@@ -13,6 +13,8 @@ python -m uvicorn web.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-
 
 打开 <http://127.0.0.1:8000>；Docker 可用 `docker compose -p noir-web up --build -d`。详见 [Web 本地运行、架构、配置、测试与部署说明](docs/WEB.md)。房间存在内存中，请保持单 worker / 单副本；本次不包含生产部署。下方仍为原桌面版说明。
 
+支持部署在 `/re7` 等子路径：设置 `NOIR_BASE_PATH=/re7`，访问 `/re7/`。浏览器接口、WebSocket、素材和邀请链接均使用当前域名；以后更换 `404elf.dev` 时无需修改游戏代码，HTTPS 代理后的 `NOIR_ORIGIN` 与域名/证书配置一同更新即可。[上线步骤与换域名说明](docs/WEB.md#上线准备与更换主域名)
+
 **中文** | [English](README.en.md)
 
 基于《生化危机 7》「21」玩法的非官方独立桌面卡牌游戏。共用 1–11 数字牌堆，隐藏首牌，用王牌改变赌注与局势。保留原项目的卡牌规则，换上暗色牌桌、中文界面与更方便的玩法设置。

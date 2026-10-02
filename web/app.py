@@ -4,22 +4,28 @@ from contextlib import asynccontextmanager
 import json
 import os
 from pathlib import Path
+import re
 import time
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from cards import CARDS, english_name
 from web.config import ROOT, load_clock, load_rules
 from web.rooms import RoomError, RoomService
 
+HEARTBEAT_TIMEOUT = 45
 
-def create_app(*, config_path=None, timer_path=None, service_options=None):
+
+def create_app(*, config_path=None, timer_path=None, service_options=None, base_path=None):
     rules = load_rules(config_path or os.environ.get("NOIR_CONFIG", ROOT / "config.json"))
     timer = load_clock(timer_path or os.environ.get("NOIR_TIMER", ROOT / "timer.json"), rules)
     service = RoomService(rules, timer, **(service_options or {}))
     public_origin = os.environ.get("NOIR_ORIGIN", "").rstrip("/")
+    base_path = (os.environ.get("NOIR_BASE_PATH", "") if base_path is None else base_path).rstrip("/")
+    if base_path and not re.fullmatch(r"(?:/[A-Za-z0-9_-]+)+", base_path):
+        raise ValueError("NOIR_BASE_PATH 必须是 /re7 这样的路径，或留空使用网站根目录。")
 
     @asynccontextmanager
     async def lifespan(app):
@@ -28,6 +34,7 @@ def create_app(*, config_path=None, timer_path=None, service_options=None):
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.rooms = service
+    app.state.base_path = base_path
 
     def valid_origin(connection):
         origin = connection.headers.get("origin")
@@ -80,23 +87,34 @@ def create_app(*, config_path=None, timer_path=None, service_options=None):
     async def room_error(request, exc):
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    @app.get("/healthz")
+    @app.get(base_path + "/healthz")
     async def health():
         return {"status": "ok"}
 
-    @app.get("/api/catalog")
+    if base_path:
+        # Internal container health probes keep working regardless of the public path.
+        app.add_api_route("/healthz", health, methods=["GET"])
+
+        async def directory_root(request: Request):
+            suffix = "?" + request.url.query if request.url.query else ""
+            # Relative redirect remains HTTPS behind a TLS-terminating proxy.
+            return RedirectResponse(base_path + "/" + suffix, status_code=307)
+
+        app.add_api_route(base_path, directory_root, methods=["GET", "HEAD"])
+
+    @app.get(base_path + "/api/catalog")
     async def catalog():
         return {name: dict(name=name, title=row[0], category=row[1], description=row[2],
                            english=english_name(name)) for name, row in CARDS.items()}
 
-    @app.post("/api/rooms", status_code=201)
+    @app.post(base_path + "/api/rooms", status_code=201)
     async def create_room(request: Request):
         service.limit(request.client.host if request.client else "unknown")
         data = await payload(request)
         room = service.create(name_checked(data.get("name")))
         return seat_response(room, 1)
 
-    @app.post("/api/rooms/{code}/join")
+    @app.post(base_path + "/api/rooms/{code}/join")
     async def join_room(code: str, request: Request):
         service.limit(request.client.host if request.client else "unknown")
         data = await payload(request)
@@ -104,7 +122,7 @@ def create_app(*, config_path=None, timer_path=None, service_options=None):
         room = service.get(code.upper())
         return seat_response(room, room.join(name))
 
-    @app.websocket("/ws/{code}")
+    @app.websocket(base_path + "/ws/{code}")
     async def connect(socket: WebSocket, code: str):
         if not valid_origin(socket):
             await socket.close(code=1008)
@@ -134,7 +152,7 @@ def create_app(*, config_path=None, timer_path=None, service_options=None):
             await room.broadcast()
             start, count = time.monotonic(), 0
             while not room.closed:
-                raw = await asyncio.wait_for(socket.receive_text(), 45)
+                raw = await asyncio.wait_for(socket.receive_text(), HEARTBEAT_TIMEOUT)
                 if len(raw.encode("utf-8")) > 2048:
                     raise RoomError("请求太大。")
                 now = time.monotonic()
@@ -158,7 +176,16 @@ def create_app(*, config_path=None, timer_path=None, service_options=None):
                 except (RoomError, json.JSONDecodeError) as exc:
                     await seat.send(socket, {"type": "error", "message": str(exc)[:180]})
                 await room.broadcast()
-        except (RoomError, ValueError, KeyError, asyncio.TimeoutError) as exc:
+        except asyncio.TimeoutError:
+            try:
+                if not attached:
+                    await socket.send_json({"type": "fatal", "message": "席位认证超时。"})
+                # An authenticated heartbeat timeout is recoverable. Do not send
+                # 'fatal': the browser must retain its seat for the grace period.
+                await socket.close(code=1012 if attached else 1008)
+            except (RuntimeError, OSError, WebSocketDisconnect):
+                pass
+        except (RoomError, ValueError, KeyError) as exc:
             try:
                 await socket.send_json({"type": "fatal", "message": str(exc)[:180] or "连接超时。"})
             except (RuntimeError, OSError, WebSocketDisconnect):
@@ -175,7 +202,7 @@ def create_app(*, config_path=None, timer_path=None, service_options=None):
             if counted:
                 service.connections -= 1
 
-    app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="web")
+    app.mount(base_path or "/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="web")
     return app
 
 

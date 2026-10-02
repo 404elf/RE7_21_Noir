@@ -42,6 +42,10 @@ def run(url, fast=False):
             a.locator("#ready").wait_for(state="visible")
             expect(a.locator("#ready")).to_be_enabled()
             code = a.locator("#room-label").inner_text()
+            assert a.url == f"{url}/?room={code}"
+            a.evaluate("navigator.clipboard.writeText = async value => { window.noirInvite = value; }")
+            a.locator("#copy-invite").click()
+            assert a.evaluate("window.noirInvite") == f"{url}/?room={code}"
             b.goto(f"{url}/?room={code}")
             assert b.locator("#room-code").input_value() == code
             b.locator("#nickname").fill("对手 Bob")
@@ -132,6 +136,13 @@ def run(url, fast=False):
             assert any(f["type"] == "patch" for f in frames)
             assert all("rules" not in f["changes"] for f in frames if f["type"] == "patch")
             assert not failures, failures
+            b.locator("#leave-room").click()
+            if b.locator("#confirm-dialog").is_visible():
+                b.locator("#confirm-ok").click()
+            expect(b.locator("#home")).to_be_visible()
+            assert b.url == url + "/"
+            b.reload()
+            expect(b.locator("#home")).to_be_visible()
             print(f"PASS: two Chromium instances, create/join, private cards, {'trumps/discard, ' if fast else ''}refresh reconnect, {moves} moves, health-based gameover, rematch, mobile and catalog; zero browser errors")
             print(f"Screenshots: {output}")
             print(f"Wire messages: { {kind: sum(f['type'] == kind for f in frames) for kind in ('state', 'patch', 'clock', 'pong')} }; idle traffic and patch-only actions checked")
@@ -183,9 +194,34 @@ def check_clock(url):
             browser.close()
 
 
+def check_heartbeat(url):
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.add_init_script("window.noirConnections = 0; window.noirCloseCodes = []; window.WebSocket = new Proxy(window.WebSocket, {construct(Target, args) { const ws = Reflect.construct(Target, args); window.noirConnections++; ws.addEventListener('close', e => noirCloseCodes.push(e.code)); return ws; }});")
+            page.goto(url)
+            page.locator('#create-room').click()
+            expect(page.locator('#ready')).to_be_visible()
+            expect(page.locator('#ready')).to_be_enabled()
+            room = page.locator('#room-label').inner_text()
+            saved = page.evaluate("Object.entries(sessionStorage).find(([key]) => key.endsWith('noir-seat'))")
+            assert saved
+            # This server uses a 1.5-second heartbeat deadline; the browser's
+            # first ping is at 10 seconds, causing an actual server timeout.
+            page.wait_for_function("() => noirCloseCodes.includes(1012) && noirConnections >= 2")
+            expect(page.locator('#ready')).to_be_enabled()
+            assert page.evaluate("sessionStorage.getItem(" + json.dumps(saved[0]) + ")") == saved[1]
+            assert page.locator('#room-label').inner_text() == room
+            print('PASS: actual heartbeat timeout closes with 1012, retains browser seat and automatically reconnects')
+        finally:
+            browser.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url")
+    parser.add_argument("--base-path", default="", help="exercise a configured application path, e.g. /re7")
     args = parser.parse_args()
     if args.url:
         run(args.url.rstrip("/"))
@@ -201,11 +237,11 @@ def main():
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
-        env = dict(os.environ, NOIR_CONFIG=str(directory / "config.json"), NOIR_TIMER=str(directory / "timer.json"), NOIR_ORIGIN="")
+        env = dict(os.environ, NOIR_CONFIG=str(directory / "config.json"), NOIR_TIMER=str(directory / "timer.json"), NOIR_ORIGIN="", NOIR_BASE_PATH=args.base_path)
         with (directory / "server.log").open("w", encoding="utf-8") as log:
             process = subprocess.Popen([sys.executable, "-m", "uvicorn", "web.app:app", "--host", "127.0.0.1", "--port", str(port), "--ws-max-size", "2048"], cwd=ROOT, env=env, stdout=log, stderr=log)
             try:
-                url = f"http://127.0.0.1:{port}"
+                url = f"http://127.0.0.1:{port}" + args.base_path.rstrip("/")
                 for _ in range(100):
                     if process.poll() is not None:
                         raise RuntimeError((directory / "server.log").read_text(encoding="utf-8"))
@@ -228,6 +264,18 @@ def main():
                     except OSError:
                         time.sleep(.1)
                 check_clock(url)
+            finally:
+                process.terminate(); process.wait(timeout=10)
+        with (directory / 'heartbeat-server.log').open('w', encoding='utf-8') as log:
+            command = f"import uvicorn,web.app; web.app.HEARTBEAT_TIMEOUT=1.5; uvicorn.run(web.app.app,host='127.0.0.1',port={port},log_level='warning')"
+            process = subprocess.Popen([sys.executable, '-c', command], cwd=ROOT, env=env, stdout=log, stderr=log)
+            try:
+                for _ in range(100):
+                    try:
+                        urllib.request.urlopen(url + '/healthz', timeout=.5).close(); break
+                    except OSError:
+                        time.sleep(.1)
+                check_heartbeat(url)
             finally:
                 process.terminate(); process.wait(timeout=10)
 

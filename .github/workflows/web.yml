@@ -23,8 +23,10 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: python -m pytest tests -q
       - run: python tests/web_e2e.py
-      - run: docker compose -p noir-web-ci up --build -d --wait
-      - run: python tests/web_e2e.py --url http://127.0.0.1:8000
+      - run: python tests/web_e2e.py --base-path /re7
+      - run: NOIR_TRUSTED_PROXIES=127.0.0.1 docker compose -f compose.yaml -f deploy/compose.proxy.example.yaml config --quiet
+      - run: NOIR_BASE_PATH=/re7 docker compose -p noir-web-ci up --build -d --wait
+      - run: python tests/web_e2e.py --url http://127.0.0.1:8000/re7
       - if: always()
         run: docker compose -p noir-web-ci down
       - uses: actions/upload-artifact@v4

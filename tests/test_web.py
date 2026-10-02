@@ -100,6 +100,76 @@ def test_static_service_and_repository_are_separated(app):
             assert client.get(path).status_code == 404
 
 
+@pytest.mark.parametrize("domain", ["game.404elf.dev", "game.other.example"])
+@pytest.mark.parametrize("prefix", ["/re7", "/games/noir"])
+def test_subpath_and_replacement_domain(domain, prefix, monkeypatch):
+    monkeypatch.delenv("NOIR_ORIGIN", raising=False)
+    app = create_app(base_path=prefix + "/")
+    origin = {"origin": f"https://{domain}"}
+    with TestClient(app, base_url=f"https://{domain}") as client:
+        redirect = client.get(prefix + "?room=ABCDEFGH", follow_redirects=False)
+        assert redirect.status_code == 307
+        assert redirect.headers["location"] == prefix + "/?room=ABCDEFGH"
+        assert client.get(prefix + "/").status_code == 200
+        for name in ("app.js", "transport.js", "presentation.js", "style.css", "grain.svg", "favicon.svg"):
+            assert client.get(prefix + "/" + name).status_code == 200
+            assert client.get("/" + name).status_code == 404
+        assert client.get("/healthz").json() == {"status": "ok"}
+        assert client.get(prefix + "/healthz").json() == {"status": "ok"}
+        assert set(client.get(prefix + "/api/catalog").json()) == set(CARDS)
+        assert client.post("/api/rooms", json={"name": "Wrong path"}, headers=origin).status_code == 404
+        host = client.post(prefix + "/api/rooms", json={"name": "Host"}, headers=origin).json()
+        code = host["room"]
+        guest = client.post(prefix + f"/api/rooms/{code}/join", json={"name": "Guest"}, headers=origin).json()
+        with client.websocket_connect(f"wss://{domain}{prefix}/ws/{code}", headers=origin) as a:
+            authenticate(a, host)
+            with client.websocket_connect(f"wss://{domain}{prefix}/ws/{code}", headers=origin) as b:
+                authenticate(b, guest)
+                sa = wait_state(a, lambda s: s["players"][1]["connected"])
+                ready(a, sa)
+                sb = wait_state(b, lambda s: s["players"][0]["ready"])
+                ready(b, sb)
+                assert wait_state(a, lambda s: s["phase"] == "ACTION")["room"] == code
+                assert wait_state(b, lambda s: s["phase"] == "ACTION")["pid"] == 2
+
+
+def test_subpath_with_https_terminating_proxy(monkeypatch):
+    monkeypatch.setenv("NOIR_ORIGIN", "https://game.other.example")
+    monkeypatch.setenv("NOIR_BASE_PATH", "/re7")
+    with TestClient(create_app(), base_url="http://internal:8000") as client:
+        response = client.get("/re7?room=ABCDEFGH", follow_redirects=False)
+        assert response.headers["location"] == "/re7/?room=ABCDEFGH"
+        endpoint = "/re7/api/rooms"
+        assert client.post(endpoint, json={"name": "Host"}, headers={"origin": "https://game.404elf.dev"}).status_code == 403
+        host = client.post(endpoint, json={"name": "Host"}, headers={"origin": "https://game.other.example"}).json()
+        with client.websocket_connect(f"/re7/ws/{host['room']}", headers={"origin": "https://game.other.example"}) as ws:
+            assert authenticate(ws, host)["pid"] == 1
+
+
+@pytest.mark.parametrize("prefix", ["re7", "/re7//other", "/../re7", "/re7?x=1", "https://example.com/re7"])
+def test_invalid_base_path_fails_startup(prefix):
+    with pytest.raises(ValueError, match="NOIR_BASE_PATH"):
+        create_app(base_path=prefix)
+
+
+def test_heartbeat_timeout_retains_seat_for_reconnect(app, monkeypatch):
+    monkeypatch.setattr("web.app.HEARTBEAT_TIMEOUT", .1)
+    with TestClient(app) as client:
+        host = client.post("/api/rooms", json={"name": "Host"}).json()
+        path = f"/ws/{host['room']}"
+        with client.websocket_connect(path, headers=ORIGIN) as ws:
+            before = authenticate(ws, host)
+            # No ping or action: the server must close recoverably, without a
+            # fatal packet that would erase the browser's session credential.
+            with pytest.raises(WebSocketDisconnect) as error:
+                ws.receive_json()
+            assert error.value.code == 1012
+        with client.websocket_connect(path, headers=ORIGIN) as ws:
+            after = authenticate(ws, host)
+            assert after["room"] == before["room"] and after["pid"] == before["pid"]
+            assert after["players"][0]["name"] == "Host"
+
+
 def test_room_reservations_origins_and_bad_input(app):
     with TestClient(app) as client:
         assert client.post("/api/rooms", json={"name": "x"}, headers={"origin": "https://evil.example"}).status_code == 403

@@ -1,5 +1,13 @@
 import { receive } from './transport.js';
 import { deal, feedback, toggleSound } from './presentation.js';
+const appRoot = new URL('./', import.meta.url);
+const storagePrefix = appRoot.pathname === '/' ? '' : appRoot.pathname;
+const seatKey = `${storagePrefix}noir-seat`, nameKey = `${storagePrefix}noir-name`;
+function inviteURL(room) {
+  const url = new URL(appRoot);
+  url.searchParams.set('room', room);
+  return url;
+}
 const $ = (id) => document.getElementById(id);
 const categories = { attack: '进攻', guard: '防御', draw: '抽牌', control: '干扰', resource: '资源', target: '目标' };
 let catalog = {}, state = null, seat = null, socket = null, selected = null;
@@ -10,7 +18,7 @@ let syncing = false;
 function storageRead(key) { try { return sessionStorage.getItem(key); } catch { return null; } }
 function saveSeat(value) {
   seat = value;
-  try { if (value) sessionStorage.setItem('noir-seat', JSON.stringify(value)); else sessionStorage.removeItem('noir-seat'); }
+  try { if (value) sessionStorage.setItem(seatKey, JSON.stringify(value)); else sessionStorage.removeItem(seatKey); }
   catch { toast('浏览器未允许会话存储，关闭页面后将无法重连。'); }
 }
 function element(tag, text, className) {
@@ -34,12 +42,12 @@ async function enter(path) {
   $('home-error').textContent = '';
   $('create-room').disabled = $('join-room').disabled = true;
   try {
-    const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('nickname').value.trim() }) });
+    const response = await fetch(new URL(path, appRoot), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('nickname').value.trim() }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '无法进入房间。');
     saveSeat(data);
-    try { sessionStorage.setItem('noir-name', $('nickname').value.trim()); } catch { /* Storage is optional. */ }
-    history.replaceState(null, '', `?room=${encodeURIComponent(data.room)}`);
+    try { sessionStorage.setItem(nameKey, $('nickname').value.trim()); } catch { /* Storage is optional. */ }
+    history.replaceState(null, '', inviteURL(data.room));
     state = null; rendered = -1; closing = false; retry = 0;
     connect();
   } catch (error) { $('home-error').textContent = error.message; }
@@ -53,7 +61,9 @@ function connect() {
   $('room-label').textContent = seat.room;
   $('notice').textContent = retry ? '连接中断，正在恢复席位…' : '正在连接牌桌…';
   connection('连接中');
-  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/${encodeURIComponent(seat.room)}`);
+  const url = new URL(`ws/${encodeURIComponent(seat.room)}`, appRoot);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(url);
   socket = ws;
   ws.onopen = () => {
     if (socket !== ws) return;
@@ -310,15 +320,15 @@ function renderCatalog() {
   }));
 }
 
-$('create-room').onclick = () => enter('/api/rooms');
-$('join-form').onsubmit = (event) => { event.preventDefault(); const code = $('room-code').value.trim().toUpperCase(); if (!/^[A-Z2-9]{8}$/.test(code)) { $('home-error').textContent = '请输入完整的 8 位房间码。'; return; } enter(`/api/rooms/${encodeURIComponent(code)}/join`); };
+$('create-room').onclick = () => enter('api/rooms');
+$('join-form').onsubmit = (event) => { event.preventDefault(); const code = $('room-code').value.trim().toUpperCase(); if (!/^[A-Z2-9]{8}$/.test(code)) { $('home-error').textContent = '请输入完整的 8 位房间码。'; return; } enter(`api/rooms/${encodeURIComponent(code)}/join`); };
 $('ready').onclick = () => send('ready');
 for (const [id, action] of Object.entries({ hit: 'HIT', stay: 'STAY', rematch: 'REMATCH', 'offer-draw': 'DRAW_OFFER', 'accept-draw': 'DRAW_ACCEPT', 'decline-draw': 'DRAW_DECLINE' })) $(id).onclick = () => send('action', action);
 $('use-trump').onclick = () => send('action', 'TRUMP', selected);
 $('discard-trump').onclick = () => send('action', 'DISCARD', selected);
 $('surrender').onclick = async () => { if (await confirmMove('就此结束？', '投降将结束本场对局，对手获胜。', '确认投降')) send('action', 'SURRENDER'); };
 $('copy-invite').onclick = async () => {
-  const link = `${location.origin}/?room=${state?.room || seat?.room}`;
+  const link = inviteURL(state?.room || seat?.room).href;
   try { await navigator.clipboard.writeText(link); toast('邀请链接已复制'); }
   catch { prompt('复制下方邀请链接：', link); }
 };
@@ -326,7 +336,7 @@ $('leave-room').onclick = async () => {
   if (state?.phase === 'ACTION' && !await confirmMove('离开牌桌？', '离席后无法回到这个座位，未结束的对局将按断线规则判负。', '确认离席')) return;
   closing = true; clearTimeout(reconnectTimer); clearInterval(heartbeat); socket?.close();
   saveSeat(null); state = null; rendered = -1; pending = null; online = false; selected = null;
-  $('home').hidden = false; $('room').hidden = true; history.replaceState(null, '', '/'); connection('双人在线牌局');
+  $('home').hidden = false; $('room').hidden = true; history.replaceState(null, '', appRoot); connection('双人在线牌局');
 };
 $('rules-open').onclick = () => { renderCatalog(); $('rules-dialog').showModal(); };
 $('rules-close').onclick = () => $('rules-dialog').close();
@@ -389,10 +399,10 @@ document.addEventListener('keydown', (event) => {
 async function init() {
   const code = new URLSearchParams(location.search).get('room');
   if (code && /^[A-Z2-9]{8}$/i.test(code)) $('room-code').value = code.toUpperCase();
-  $('nickname').value = storageRead('noir-name') || '无名旅人';
-  try { const response = await fetch('/api/catalog'); if (!response.ok) throw new Error(); catalog = await response.json(); }
+  $('nickname').value = storageRead(nameKey) || '无名旅人';
+  try { const response = await fetch(new URL('api/catalog', appRoot)); if (!response.ok) throw new Error(); catalog = await response.json(); }
   catch { toast('图鉴加载失败，请检查网络后刷新。'); }
-  try { const saved = JSON.parse(storageRead('noir-seat')); if (saved && typeof saved.token === 'string' && /^[A-Z2-9]{8}$/.test(saved.room)) { seat = saved; connect(); } }
+  try { const saved = JSON.parse(storageRead(seatKey)); if (saved && typeof saved.token === 'string' && /^[A-Z2-9]{8}$/.test(saved.room)) { seat = saved; connect(); } }
   catch { saveSeat(null); }
 }
 init();
