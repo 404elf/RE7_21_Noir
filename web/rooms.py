@@ -1,5 +1,6 @@
 """Authoritative browser rooms. All engine mutations run synchronously on one loop."""
 import asyncio
+import copy
 from collections import deque
 from dataclasses import dataclass, field
 import secrets
@@ -9,6 +10,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from match import Match
 from rules import rules_active
+from web.protocol import make_patch
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ACTIONS = {"HIT", "STAY", "TRUMP", "DISCARD", "SURRENDER", "DRAW_OFFER",
@@ -26,6 +28,8 @@ class Seat:
     socket: object = None
     ready: bool = False
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    view: dict = None
+    clock_sent: float = 0
 
     async def send(self, socket, value):
         async with self.send_lock:
@@ -73,6 +77,7 @@ class Room:
         # Freeze up to this instant before restoring the second connection.
         self.advance()
         self.seats[pid].socket = socket
+        self.seats[pid].view = None
         self.changed()
         self.advance()
 
@@ -80,6 +85,7 @@ class Room:
         if self.seats[pid].socket is socket:
             self.advance()
             self.seats[pid].socket = None
+            self.seats[pid].view = None
             if not self.match:
                 self.seats[pid].ready = False
             self.changed()
@@ -186,10 +192,55 @@ class Room:
                          enabled_cards=self.match.enabled_cards)
         return value
 
+    def timing(self):
+        gs = self.match.gs if self.match else None
+        paused = bool(gs and gs.phase != "GAMEOVER" and self.connected < 2)
+        settlement = (max(0, gs.result_timer - self.match.wall())
+                      if gs and gs.phase == "RESULT" else None)
+        return dict(revision=self.revision, paused=paused,
+                    clock_active=gs.clock_active if gs else 0,
+                    preparation_active=gs.preparation_active if gs else 0,
+                    players=[dict(id=p, clock=self.match.remaining[p],
+                                  preparation=self.match.preparation_remaining[p])
+                             for p in (1, 2)] if gs else [],
+                    reconnect_seconds=max(0, self.grace - (self.clock() - self.missing_since))
+                    if paused and self.missing_since is not None else None,
+                    settlement_seconds=settlement)
+
+    async def deliver(self, pid, socket, *, force=False):
+        seat = self.seats[pid]
+        # Broadcasts and action responses share this lock and a single baseline.
+        async with seat.send_lock:
+            if seat.socket is not socket:
+                return
+            now = self.clock()
+            changed = seat.view is None or seat.view["revision"] != self.revision
+            gs = self.match.gs if self.match else None
+            calibration = bool(gs and gs.phase != "GAMEOVER" and
+                               (self.timer.get("enabled") or gs.phase == "RESULT"
+                                or self.connected < 2) and now - seat.clock_sent >= 5)
+            if not force and not changed and not calibration:
+                return  # No projection, JSON serialization or network traffic while idle.
+            # Engine effects contain mutable counters. Freeze exactly what goes
+            # on the wire before yielding, so a later move cannot alter this baseline.
+            view = copy.deepcopy(self.snapshot(pid)) if force or changed else None
+            timing = self.timing()
+            if view is not None:
+                value = ({**view, "protocol": 2} if force or seat.view is None
+                         else make_patch(seat.view, view))
+                value["timing"] = timing
+            else:
+                value = {"type": "clock", **timing}
+            await asyncio.wait_for(socket.send_json(value), 2)
+            if seat.socket is socket:
+                if view is not None:
+                    seat.view = view
+                seat.clock_sent = now
+
     async def broadcast(self):
         async def deliver(pid, seat, socket):
             try:
-                await seat.send(socket, self.snapshot(pid))
+                await self.deliver(pid, socket)
             except (OSError, RuntimeError, WebSocketDisconnect, asyncio.TimeoutError):
                 self.detach(pid, socket)
                 try:

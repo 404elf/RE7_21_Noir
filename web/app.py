@@ -131,7 +131,7 @@ def create_app(*, config_path=None, timer_path=None, service_options=None):
             room.attach(pid, socket)
             attached = True
             seat = room.seats[pid]
-            await seat.send(socket, room.snapshot(pid))
+            await room.broadcast()
             start, count = time.monotonic(), 0
             while not room.closed:
                 raw = await asyncio.wait_for(socket.receive_text(), 45)
@@ -150,10 +150,14 @@ def create_app(*, config_path=None, timer_path=None, service_options=None):
                     if data.get("type") == "ping":
                         await seat.send(socket, {"type": "pong"})
                         continue
+                    if data.get("type") == "sync":
+                        room.advance()
+                        await room.deliver(pid, socket, force=True)
+                        continue
                     room.command(pid, data)
                 except (RoomError, json.JSONDecodeError) as exc:
                     await seat.send(socket, {"type": "error", "message": str(exc)[:180]})
-                await seat.send(socket, room.snapshot(pid))
+                await room.broadcast()
         except (RoomError, ValueError, KeyError, asyncio.TimeoutError) as exc:
             try:
                 await socket.send_json({"type": "fatal", "message": str(exc)[:180] or "连接超时。"})

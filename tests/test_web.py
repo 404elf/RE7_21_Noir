@@ -37,9 +37,33 @@ def app(tmp_path):
 def wait_state(ws, predicate=lambda s: True):
     for _ in range(100):
         data = ws.receive_json()
-        if data["type"] == "state" and predicate(data):
-            return data
+        value = consume(ws, data)
+        if value is not None and predicate(value):
+            return value
     raise AssertionError("Expected state did not arrive")
+
+
+def consume(ws, data):
+    value = getattr(ws, "noir_state", None)
+    if data["type"] == "state":
+        value = data
+    elif data["type"] == "patch":
+        assert value and data["base_revision"] == value["revision"]
+        value.update(data["changes"], revision=data["revision"])
+        for p in data["players"]:
+            value["players"][p["id"] - 1].update(p)
+        value["events"] = (data["events"] if data["events_reset"]
+                           else value.get("events", []) + data["events"])[-80:]
+    elif data["type"] != "clock":
+        return None
+    timing = data.get("timing", data if data["type"] == "clock" else None)
+    if timing:
+        for p in timing["players"]:
+            value["players"][p["id"] - 1].update(p)
+        for key in ("paused", "clock_active", "preparation_active", "reconnect_seconds"):
+            value[key] = timing[key]
+    ws.noir_state = value
+    return copy.deepcopy(value)
 
 
 def authenticate(ws, seat):
@@ -119,27 +143,24 @@ def test_two_websockets_complete_match_reconnect_and_rematch(app):
                 while b.receive_json()["type"] != "error":
                     pass
                 # Play actual deals to a health-based end; no surrender shortcut.
-                states = {1: sa, 2: sb}
                 for _ in range(100):
-                    sa = wait_state(a)
                     if sa["phase"] == "GAMEOVER":
                         break
                     if sa["phase"] != "ACTION":
+                        sa = wait_state(a, lambda s: s["phase"] in ("ACTION", "GAMEOVER"))
+                        sb = wait_state(b, lambda s: s["revision"] >= sa["revision"])
                         continue
                     pid = sa["turn"]
                     ws = a if pid == 1 else b
-                    s = sa if pid == 1 else wait_state(b, lambda s: s["revision"] >= sa["revision"])
+                    s = sa if pid == 1 else sb
                     if s["phase"] != "ACTION" or s["turn"] != pid:
                         continue
                     own = s["players"][pid - 1]
                     action = "HIT" if own["total"] < 17 and s["deck_count"] else "STAY"
                     time.sleep(.51)
                     ws.send_json({"type": "action", "action": action, "revision": s["revision"]})
-                    # Drain to the command response (or a stale-revision error).
-                    for _ in range(50):
-                        value = ws.receive_json()
-                        if value["type"] == "error" or value["type"] == "state" and value["revision"] > s["revision"]:
-                            break
+                    sa = wait_state(a, lambda v: v["revision"] > s["revision"])
+                    sb = wait_state(b, lambda v: v["revision"] >= sa["revision"])
                 else:
                     pytest.fail("Match did not complete")
                 assert sa["winner"] in (1, 2)

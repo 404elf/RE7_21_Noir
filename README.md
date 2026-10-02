@@ -4,6 +4,8 @@
 
 新增浏览器双人牌桌：房间码 / 邀请链接、全部 Noir 王牌、原版计时、断线重连、求和 / 投降和再战。复用现有 Python 规则及 `config.json`，无需 Pygame 或组网软件。
 
+采用按事件发送的私有状态补丁与低频计时校准，空闲时不广播牌桌。新的 Web 界面包含纸牌翻转与拖拽、光效与受伤反馈、可选音效、手机布局和减少动态效果支持。[界面预览](docs/web-noir-home.png)
+
 ```sh
 python -m pip install -r requirements-web.txt
 python -m uvicorn web.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 2048

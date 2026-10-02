@@ -1,8 +1,11 @@
+import { receive } from './transport.js';
+import { deal, feedback, toggleSound } from './presentation.js';
 const $ = (id) => document.getElementById(id);
 const categories = { attack: '进攻', guard: '防御', draw: '抽牌', control: '干扰', resource: '资源', target: '目标' };
 let catalog = {}, state = null, seat = null, socket = null, selected = null;
 let pending = null, rendered = -1, reconnectTimer, heartbeat, toastTimer, cooldownTimer;
 let closing = false, retry = 0, online = false, cooldown = 0;
+let syncing = false;
 
 function storageRead(key) { try { return sessionStorage.getItem(key); } catch { return null; } }
 function saveSeat(value) {
@@ -61,14 +64,22 @@ function connect() {
   ws.onmessage = (event) => {
     if (socket !== ws) return;
     const data = JSON.parse(event.data);
-    if (data.type === 'state') {
+    if (['state', 'patch', 'clock'].includes(data.type)) {
       if (state && data.revision < state.revision) return;
+      const next = receive(state, data);
+      if (!next) {
+        if (!syncing) ws.send(JSON.stringify({ type: 'sync' }));
+        syncing = true; updateControls(); return;
+      }
       online = true; retry = 0;
       if (pending !== null && data.revision > pending) pending = null;
-      if (JSON.stringify(myPlayer()?.trumps) !== JSON.stringify(data.players.find((p) => p.id === data.pid)?.trumps)) selected = null;
-      state = data;
+      if (JSON.stringify(myPlayer()?.trumps) !== JSON.stringify(next.players.find((p) => p.id === next.pid)?.trumps)) selected = null;
+      const previous = state;
+      state = next;
+      if (data.type === 'state') { syncing = false; pending = null; rendered = -1; }
       connection('已连接 · 私人牌桌');
       render();
+      if (data.type === 'patch') feedback(previous, state);
     } else if (data.type === 'error') {
       pending = null; toast(data.message); updateControls();
     } else if (data.type === 'fatal' || data.type === 'closed') {
@@ -140,21 +151,40 @@ function renderPlayer(p, mine) {
   const root = $(mine ? 'my-player' : 'opponent');
   const heading = element('div', null, 'player-heading');
   const label = element('div');
-  label.append(element('span', p.name, 'player-name'), element('span', mine ? 'YOU' : 'OPPONENT', 'player-tag'));
+  label.append(element('span', p.name.slice(0, 1), 'avatar'), element('span', p.name, 'player-name'), element('span', mine ? 'YOU' : 'OPPONENT', 'player-tag'));
   const stats = element('div');
   stats.append(element('span', `♥ ${p.hp} / ${state.max_hp}`, 'health'));
+  const vitality = element('progress', null, 'vitality'); vitality.max = state.max_hp; vitality.value = p.hp; vitality.setAttribute('aria-label', `${p.name} 生命 ${p.hp}`); stats.append(vitality);
   const clock = element('span', '', 'clock'); clock.id = `clock-${p.id}`;
   stats.append(clock); heading.append(label, stats);
-  const cards = element('div', null, 'number-cards');
+  let cards = root.querySelector('.number-cards');
+  if (!cards) { cards = element('div', null, 'number-cards'); root.replaceChildren(heading, cards); }
+  else root.querySelector('.player-heading').replaceWith(heading);
+  const oldCards = new Map([...cards.querySelectorAll('.number-card')].map((c) => [c.dataset.key, c]));
+  const added = [];
   p.hand.forEach((number, index) => {
-    const card = element('div', number === null ? 'N' : String(number), `number-card ${number === null ? 'hidden-card' : index === 0 && mine ? 'private-card' : ''}`);
+    const key = index === 0 ? 'first' : `number-${number}`;
+    const existing = oldCards.get(key);
+    const card = existing || element('div');
+    card.dataset.key = key; oldCards.delete(key);
+    card.className = `number-card ${number === null ? 'hidden-card' : index === 0 && mine ? 'private-card' : ''}`;
     card.setAttribute('aria-label', number === null ? '对手暗牌' : `${index === 0 ? '底牌' : '明牌'} ${number}`);
-    if (index === 0 && number !== null) card.append(element('small', '底牌'));
+    if (!existing) {
+      const inner = element('div', null, 'number-inner');
+      const front = element('div', null, 'card-face card-front');
+      front.append(element('span', '', 'card-rank'), element('strong', '', 'card-number'), element('span', '', 'card-rank bottom'));
+      const back = element('div', null, 'card-face card-back'); back.append(element('strong', '◆'), element('small', 'NOIR / 21'));
+      inner.append(front, back); card.append(inner); added.push(card);
+    }
+    card.querySelectorAll('.card-rank, .card-number').forEach((n) => { n.textContent = number === null ? '' : String(number); });
+    const tag = card.querySelector('.card-private');
+    if (index === 0 && mine && !tag) card.querySelector('.card-front').append(element('small', 'PRIVATE', 'card-private'));
     cards.append(card);
   });
   const total = element('div', null, `total ${p.total > state.target ? 'bust' : ''}`);
   total.append(element('strong', p.total === null ? '? + ' + p.hand.slice(1).reduce((a, b) => a + b, 0) : String(p.total)), element('small', p.total === null ? `明牌点数 · 王牌 ${p.trump_count}` : p.total > state.target ? '已爆牌 · 可用王牌自救' : `总点数 · 王牌 ${p.trump_count}`));
-  cards.append(total); root.replaceChildren(heading, cards);
+  oldCards.forEach((card) => card.remove()); cards.querySelector('.total')?.remove();
+  cards.append(total); added.forEach((card, i) => deal(card, i));
 }
 
 function renderGame() {
@@ -175,12 +205,13 @@ function renderGame() {
   $('trump-count').textContent = `${cards.length} / ${state.rules.game_settings.max_trumps_hand_size}`;
   $('trump-hand').replaceChildren(...cards.map(([name], index) => {
     const info = cardInfo(name);
-    const button = element('button', null, `trump-card ${selected === index ? 'selected' : ''}`);
+    const button = element('button', null, `trump-card ${info.category} ${selected === index ? 'selected' : ''}`);
     button.dataset.index = index;
     button.setAttribute('aria-pressed', String(selected === index));
     button.setAttribute('aria-label', `${info.title}：${info.description}`);
-    button.append(element('span', categories[info.category], 'category'), element('strong', info.title), element('small', info.english));
-    button.onclick = () => { selected = index; renderGame(); updateClocks(); updateControls(); $('trump-hand').querySelector(`[data-index="${index}"]`)?.focus({ preventScroll: true }); };
+    const symbols = { attack: '†', guard: '◇', draw: '↗', control: '✣', resource: '∞', target: '◎' };
+    button.append(element('span', categories[info.category], 'category'), element('span', symbols[info.category] || '◆', 'trump-art'), element('strong', info.title), element('small', info.english));
+    button.onclick = () => { if (suppressClick) return; selected = index; renderGame(); updateClocks(); updateControls(); $('trump-hand').querySelector(`[data-index="${index}"]`)?.focus({ preventScroll: true }); };
     return button;
   }));
   if (!cards.length) $('trump-hand').append(element('p', '暂无王牌。每局开始会按配置补充。', 'muted'));
@@ -218,8 +249,12 @@ function renderResult() {
   const current = ['RESULT', 'GAMEOVER'].includes(state.phase);
   const result = current ? state : state.last_result;
   $('result-panel').hidden = !result;
+  $('table-verdict').hidden = !current;
   if (!result) return;
   const over = state.phase === 'GAMEOVER';
+  $('verdict-label').textContent = over ? 'THE FINAL VERDICT' : `ROUND ${String(state.round).padStart(2, '0')} / REVEAL`;
+  $('verdict-title').textContent = state.winner === 0 ? 'DRAW' : state.winner === state.pid ? (over ? 'YOU SURVIVED' : 'YOU WIN') : (over ? 'GAME OVER' : 'YOU LOSE');
+  $('table-verdict').className = `table-verdict ${state.winner === state.pid ? 'victory' : state.winner ? 'loss' : ''}`;
   $('result-title').textContent = result.winner === 0 ? '平局。' : result.winner === state.pid ? (over ? '你赢得了本场。' : '这一手，你赢了。') : (over ? '本场落败。' : '这一手，对手胜。');
   const reasons = { surrender: '玩家投降', agreement: '双方同意平局', timeout: '整场计时耗尽', preparation_timeout: '首次准备超时', disconnect: '断线超过重连宽限期' };
   $('result-text').textContent = (over && reasons[state.end_reason]) || (result.escape ? '逃脱成功，平局结束整场。' : `${current ? '本局' : `上一局（第 ${result.round} 局）`}伤害 ${result.damage}。${over ? '双方可选择再战。' : '下一局继续争夺。'}`);
@@ -233,13 +268,21 @@ function updateClocks() {
     const node = $(`clock-${p.id}`);
     if (!node) continue;
     const prep = state.preparation_active === p.id;
-    const left = prep ? p.preparation : p.clock;
+    const elapsed = online && !state.paused && state.phase === 'ACTION' ? (performance.now() - state.receivedAt) / 1000 : 0;
+    const active = prep || state.clock_active === p.id && !state.preparation_active;
+    const stored = prep ? p.preparation : p.clock;
+    const left = stored === null ? null : Math.max(0, stored - (active ? elapsed : 0));
     node.textContent = state.timer.enabled ? `${prep ? '准备 ' : ''}${left === null ? '∞' : Math.ceil(left) + 's'}${state.paused ? ' · 暂停' : ''}` : '';
+    node.classList.toggle('urgent', left !== null && left <= 10 && active);
+  }
+  if (state.paused) {
+    const left = Math.max(0, Math.ceil((state.reconnect_seconds || 0) - (performance.now() - state.receivedAt) / 1000));
+    $('notice').textContent = `对手连接中断，牌局与计时已暂停。剩余重连时间 ${left} 秒。`;
   }
 }
 
 function updateControls() {
-  const ready = online && state && pending === null;
+  const ready = online && !syncing && state && pending === null;
   $('ready').disabled = !ready || state?.phase !== 'LOBBY' || myPlayer()?.ready;
   const action = ready && !state.paused && state.phase === 'ACTION';
   const turn = action && state.turn === state.pid && Date.now() >= cooldown;
@@ -254,6 +297,8 @@ function updateControls() {
   $('accept-draw').disabled = $('decline-draw').disabled = !action;
   $('rematch').disabled = !ready || state?.players.some((p) => !p.connected) || myPlayer()?.rematch;
   if (state && state.phase !== 'LOBBY') $('turn-hint').textContent = state.paused ? '暂停 · 等待对手重连' : state.phase !== 'ACTION' ? '等待下一手' : state.turn === state.pid ? (myPlayer().stopped ? '你已停牌，仍可重新行动' : lockedDraw ? '轮到你 · 抽牌被封锁' : '轮到你 · 做出选择') : '对手正在思考…';
+  document.querySelector('.table').classList.toggle('my-turn', Boolean(turn));
+  $('table-status').textContent = state?.phase === 'ACTION' ? state.paused ? 'TABLE PAUSED' : state.turn === state.pid ? 'YOUR MOVE' : 'OPPONENT’S MOVE' : 'THE VERDICT';
 }
 
 function renderCatalog() {
@@ -271,14 +316,14 @@ $('ready').onclick = () => send('ready');
 for (const [id, action] of Object.entries({ hit: 'HIT', stay: 'STAY', rematch: 'REMATCH', 'offer-draw': 'DRAW_OFFER', 'accept-draw': 'DRAW_ACCEPT', 'decline-draw': 'DRAW_DECLINE' })) $(id).onclick = () => send('action', action);
 $('use-trump').onclick = () => send('action', 'TRUMP', selected);
 $('discard-trump').onclick = () => send('action', 'DISCARD', selected);
-$('surrender').onclick = () => { if (confirm('确定投降并结束本场对局？')) send('action', 'SURRENDER'); };
+$('surrender').onclick = async () => { if (await confirmMove('就此结束？', '投降将结束本场对局，对手获胜。', '确认投降')) send('action', 'SURRENDER'); };
 $('copy-invite').onclick = async () => {
   const link = `${location.origin}/?room=${state?.room || seat?.room}`;
   try { await navigator.clipboard.writeText(link); toast('邀请链接已复制'); }
   catch { prompt('复制下方邀请链接：', link); }
 };
-$('leave-room').onclick = () => {
-  if (state?.phase === 'ACTION' && !confirm('退出会清除本页席位凭证，无法再用本页重连；未结束的对局会按断线规则判负。确定退出？')) return;
+$('leave-room').onclick = async () => {
+  if (state?.phase === 'ACTION' && !await confirmMove('离开牌桌？', '离席后无法回到这个座位，未结束的对局将按断线规则判负。', '确认离席')) return;
   closing = true; clearTimeout(reconnectTimer); clearInterval(heartbeat); socket?.close();
   saveSeat(null); state = null; rendered = -1; pending = null; online = false; selected = null;
   $('home').hidden = false; $('room').hidden = true; history.replaceState(null, '', '/'); connection('双人在线牌局');
@@ -286,8 +331,57 @@ $('leave-room').onclick = () => {
 $('rules-open').onclick = () => { renderCatalog(); $('rules-dialog').showModal(); };
 $('rules-close').onclick = () => $('rules-dialog').close();
 $('catalog-search').oninput = renderCatalog;
+$('sound-toggle').onclick = toggleSound;
+
+function confirmMove(title, copy, label) {
+  const dialog = $('confirm-dialog');
+  $('confirm-title').textContent = title; $('confirm-copy').textContent = copy;
+  $('confirm-ok').textContent = label; dialog.returnValue = '';
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'yes'), { once: true });
+    $('confirm-ok').onclick = () => dialog.close('yes');
+    $('confirm-cancel').onclick = () => dialog.close('no');
+    dialog.showModal(); $('confirm-cancel').focus();
+  });
+}
+
+let drag = null, suppressClick = false;
+$('trump-hand').addEventListener('pointerdown', (event) => {
+  const card = event.target.closest('.trump-card');
+  if (!card || event.button !== 0 || !matchMedia('(pointer: fine)').matches) return;
+  drag = { index: Number(card.dataset.index), revision: state.revision, x: event.clientX, y: event.clientY, card, ghost: null };
+});
+function endDrag() {
+  drag?.ghost?.remove(); drag = null; document.body.classList.remove('dragging');
+  document.querySelectorAll('.drop-hover').forEach((n) => n.classList.remove('drop-hover'));
+}
+document.addEventListener('pointermove', (event) => {
+  if (!drag) return;
+  if (!drag.ghost && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return;
+  if (!drag.ghost) {
+    drag.ghost = drag.card.cloneNode(true); drag.ghost.classList.add('drag-ghost');
+    drag.ghost.setAttribute('aria-hidden', 'true'); drag.ghost.tabIndex = -1;
+    document.body.append(drag.ghost); document.body.classList.add('dragging');
+    selected = drag.index; suppressClick = true; updateControls();
+  }
+  drag.ghost.style.left = `${event.clientX - 55}px`; drag.ghost.style.top = `${event.clientY - 65}px`;
+  const zone = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-drop]');
+  document.querySelectorAll('[data-drop]').forEach((n) => n.classList.toggle('drop-hover', n === zone));
+});
+document.addEventListener('pointerup', (event) => {
+  if (!drag) return;
+  if (drag.ghost) {
+    const zone = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-drop]');
+    const button = zone?.dataset.drop === 'play' ? $('use-trump') : zone?.dataset.drop === 'discard' ? $('discard-trump') : null;
+    if (drag.revision === state.revision && button && !button.disabled) button.click();
+    else if (zone) toast('当前不能出牌，请等待你的行动。');
+  }
+  endDrag(); setTimeout(() => { suppressClick = false; }, 0);
+});
+document.addEventListener('pointercancel', () => { endDrag(); suppressClick = false; });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { endDrag(); suppressClick = false; } });
 document.addEventListener('keydown', (event) => {
-  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || $('rules-dialog').open || ['INPUT', 'TEXTAREA', 'BUTTON'].includes(document.activeElement.tagName)) return;
+  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || $('rules-dialog').open || $('confirm-dialog').open || ['INPUT', 'TEXTAREA', 'BUTTON'].includes(document.activeElement.tagName)) return;
   const button = event.key.toLowerCase() === 'h' ? $('hit') : event.key.toLowerCase() === 's' ? $('stay') : null;
   if (button && !button.disabled) { event.preventDefault(); button.click(); }
 });
@@ -302,3 +396,4 @@ async function init() {
   catch { saveSeat(null); }
 }
 init();
+setInterval(updateClocks, 100);

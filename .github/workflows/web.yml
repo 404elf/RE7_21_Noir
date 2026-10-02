@@ -31,4 +31,6 @@ jobs:
         if: always()
         with:
           name: browser-screenshots
-          path: .artifacts/web-*.png
+          path: |
+            .artifacts/web-*.png
+            .artifacts/web-network.json
