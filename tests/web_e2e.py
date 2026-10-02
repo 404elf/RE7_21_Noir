@@ -46,6 +46,7 @@ def run(url, fast=False):
             assert b.locator("#room-code").input_value() == code
             b.locator("#nickname").fill("对手 Bob")
             b.locator("#join-room").click()
+            expect(b.locator("#ready")).to_be_visible()
             expect(b.locator("#ready")).to_be_enabled()
             expect(a.locator("#lobby-players")).to_contain_text("对手 Bob")
             a.locator("#ready").click()
@@ -67,6 +68,8 @@ def run(url, fast=False):
                 expect(a.locator("#my-effects")).to_contain_text("加注")
                 assert "轮到你" in a.locator("#turn-hint").inner_text()
                 remaining = a.locator(".trump-card").count()
+                a.locator(".trump-card").first.click()
+                expect(a.locator("#discard-trump")).to_be_enabled()
                 a.locator(".trump-card").first.drag_to(a.locator("#discard-drop"))
                 expect(a.locator(".trump-card")).to_have_count(remaining - 1)
                 # A lost baseline must request one full sync and recover the same hand.
@@ -148,9 +151,9 @@ def check_clock(url):
         try:
             a, b = browser.new_page(), browser.new_page()
             a.on('websocket', lambda ws: ws.on('framereceived', lambda value: frames.append(json.loads(value))))
-            a.goto(url); a.locator('#create-room').click(); expect(a.locator('#ready')).to_be_enabled()
+            a.goto(url); a.locator('#create-room').click(); expect(a.locator('#ready')).to_be_visible(); expect(a.locator('#ready')).to_be_enabled()
             code = a.locator('#room-label').inner_text()
-            b.goto(f'{url}/?room={code}'); b.locator('#join-room').click(); expect(b.locator('#ready')).to_be_enabled()
+            b.goto(f'{url}/?room={code}'); b.locator('#join-room').click(); expect(b.locator('#ready')).to_be_visible(); expect(b.locator('#ready')).to_be_enabled()
             a.locator('#ready').click(); expect(b.locator('#lobby-players')).to_contain_text('已准备')
             b.locator('#ready').click(); a.locator('#game').wait_for(state='visible')
             first = int(re.search(r'\d+', a.locator('#clock-1').inner_text()).group())
